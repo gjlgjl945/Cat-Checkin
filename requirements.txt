@@ -1,0 +1,10 @@
+# ZaiZaiCat-Checkin 运行依赖
+# Python 端依赖
+requests>=2.31.0
+PyExecJS2>=1.5.1
+pycryptodome>=3.19.0
+Pillow>=10.0.0
+
+# Node.js 端依赖（仅顺丰速运脚本需要执行 code.js）
+# GitHub Actions 工作流通过 setup-node 安装 Node.js 18，无需 Python 包，
+# 但本地直接运行时请确保系统已安装 Node.js >= 16。
