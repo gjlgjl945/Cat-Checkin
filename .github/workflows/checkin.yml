@@ -1,0 +1,119 @@
+name: 多平台每日签到
+
+on:
+  # 北京时间每天 08:00 触发（GitHub Actions 使用 UTC，所以是 UTC 00:00）
+  schedule:
+    - cron: "0 0 * * *"
+  # 允许在 Actions 页面手动运行（Settings → Secrets 中必须已配置 TOKEN_JSON 才能跑通）
+  workflow_dispatch:
+
+# 防止并发执行（同一 workflow 重复排队）
+concurrency:
+  group: checkin-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  checkin:
+    name: 顺丰速运 / 看雪 / 鸿星尔克 / WPS / 什么值得买
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 设置 Node.js 20（顺丰脚本需要执行 code.js）
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 安装 Python 依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 检查必要 Secrets
+        id: check-secrets
+        env:
+          TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+        run: |
+          if [ -z "$TOKEN_JSON" ]; then
+            echo "::error::缺少 Secret: TOKEN_JSON。请在仓库 Settings → Secrets and variables → Actions 中添加。"
+            exit 1
+          fi
+          echo "secrets_ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: 写入 config/token.json
+        env:
+          TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+        run: |
+          # TOKEN_JSON 存放的是整个 token.json 文件的 base64 编码内容
+          # 在本地用 `base64 -w0 config/token.json`（Windows 用 `certutil -encodehex` 或直接填原文）生成
+          mkdir -p config
+          printf '%s' "$TOKEN_JSON" | base64 -d > config/token.json
+          python -c "import json; json.load(open('config/token.json', encoding='utf-8'))" \
+            || (echo "::error::config/token.json 不是合法 JSON，请检查 base64 编码" && exit 1)
+          echo "已生成 config/token.json，大小 $(wc -c < config/token.json) 字节"
+
+      - name: 写入 config/notification.json（如已配置推送）
+        if: ${{ secrets.NOTIFICATION_JSON != '' }}
+        env:
+          NOTIFICATION_JSON: ${{ secrets.NOTIFICATION_JSON }}
+        run: |
+          mkdir -p config
+          printf '%s' "$NOTIFICATION_JSON" | base64 -d > config/notification.json
+          python -c "import json; json.load(open('config/notification.json', encoding='utf-8'))" \
+            || (echo "::error::config/notification.json 不是合法 JSON，请检查 base64 编码" && exit 1)
+          echo "已生成 config/notification.json"
+
+      - name: 运行签到任务（顺序执行，单平台失败不影响后续）
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: 1
+        run: |
+          set +e   # 单个脚本失败不中断整个工作流
+          overall_exit=0
+          for entry in \
+            "顺丰速运|script/sf/main.py" \
+            "看雪论坛|script/kanxue/sign_in.py" \
+            "鸿星尔克|script/erke/main.py" \
+            "WPS Office|script/wps/main.py" \
+            "什么值得买|script/smzdm/sign_daily_task/main.py"; do
+            name="${entry%%|*}"
+            path="${entry#*|}"
+            echo "=========================================="
+            echo "▶ 开始 $name（$path）"
+            echo "=========================================="
+            python "$path"
+            rc=$?
+            echo "▶ $name 退出码: $rc"
+            if [ $rc -ne 0 ]; then
+              overall_exit=1
+              echo "::warning::$name 执行失败（退出码 $rc），继续下一个"
+            fi
+          done
+          echo "=========================================="
+          echo "汇总退出码: $overall_exit"
+          exit $overall_exit
+
+      - name: 上传运行日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkin-logs
+          path: |
+            config/
+            script/smzdm/smzdm_task.log
+            *.log
+          if-no-files-found: ignore
+          retention-days: 14
