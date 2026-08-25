@@ -66,10 +66,13 @@ jobs:
           echo "已生成 config/token.json，大小 $(wc -c < config/token.json) 字节"
 
       - name: 写入 config/notification.json（如已配置推送）
-        if: ${{ secrets.NOTIFICATION_JSON != '' }}
         env:
           NOTIFICATION_JSON: ${{ secrets.NOTIFICATION_JSON }}
         run: |
+          if [ -z "$NOTIFICATION_JSON" ]; then
+            echo "未配置 NOTIFICATION_JSON Secret，跳过推送配置写入"
+            exit 0
+          fi
           mkdir -p config
           printf '%s' "$NOTIFICATION_JSON" | base64 -d > config/notification.json
           python -c "import json; json.load(open('config/notification.json', encoding='utf-8'))" \
