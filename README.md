@@ -83,12 +83,15 @@
 
 ### 抓包工具准备
 
-按平台不同，你需要以下两类工具之一：
+按平台不同，你需要以下几类工具之一：
 
 | 工具 | 适用场景 | 获取方式 |
 |---|---|---|
 | 浏览器 DevTools | 网页端可登录的平台（看雪、WPS） | Chrome/Edge 按 `F12` 即可，无需安装 |
-| Fiddler Classic | APP / 微信小程序抓包（顺丰、鸿星尔克、什么值得买） | https://www.telerik.com/fiddler/fiddler-classic 免费下载 |
+| EditThisCookie 扩展 | 网页端 Cookie 一键导出（看雪、WPS、什么值得买），**免 F12、免抓包** | Edge/Chrome 应用商店搜 `EditThisCookie` 安装 |
+| Fiddler Classic | APP / 微信小程序抓包（顺丰、鸿星尔克） | https://www.telerik.com/fiddler/fiddler-classic 免费下载 |
+
+> 💡 推荐优先用 **EditThisCookie**：网页端三个平台（看雪、WPS、什么值得买）都能用它直接导出 Cookie，完全绕开 F12——尤其是什么值得买有反调试机制（打开 F12 会不停弹出 `debugger` 断点），用扩展导出可以彻底避开。
 
 **Fiddler 抓包 HTTPS 的前置设置**（只需做一次）：
 
@@ -100,6 +103,68 @@
 6. 手机浏览器访问 `http://ipv4.fiddler:8888` 下载并安装 Fiddler 证书（安卓还需在系统设置中信任该证书）
 
 > ⚠️ 抓包完成后请及时关闭手机代理设置，否则断开电脑后手机无法上网。
+
+---
+
+### 使用 EditThisCookie 导出 Cookie（免 F12，推荐）
+
+EditThisCookie 是浏览器 Cookie 管理扩展，登录网站后点一下就能导出全部 Cookie，不需要打开开发者工具，也不会触发任何反调试机制。
+
+**第 1 步：安装**
+
+Edge / Chrome 应用商店搜索 `EditThisCookie` 安装（Chrome 商店地址：https://chromewebstore.google.com/detail/editthiscookie/fngmhnnpilhplaeedifhccceomclgfbg ）。安装后工具栏会出现一个饼干图标。
+
+**第 2 步：设置导出格式（一次性）**
+
+社区维护版 EditThisCookie 支持多种导出格式。先把它改成脚本直接可用的格式：
+
+1. 点击工具栏饼干图标 → 右下角齿轮（设置/Options）
+2. 找到「选择 cookies 的导出格式」，选 **`Semicolon separated name=value pairs`**
+3. 保存
+
+**第 3 步：导出 Cookie**
+
+1. 浏览器登录目标网站（如 https://www.smzdm.com ）
+2. 点击工具栏的 EditThisCookie 饼干图标
+3. 点右上角 **导出（Export）** 按钮 —— 剪贴板里直接就是一行分号分隔的字符串：
+
+```
+__ckguid=xxxxx; device_id=xxxxx; smzdm_id=123456; user=user123; ...
+```
+
+把这行完整复制，填进配置文件的 `"cookie"` 字段即可，无需任何转换。
+
+**备选：旧版扩展没有格式选项时（导出的是 JSON 数组）**
+
+如果你装的版本设置里没有导出格式选项，导出会是 JSON 数组，需要转换一次。存成 `cookies.json` 后任选：
+
+方式一：Python（本项目本身就需要 Python）：
+
+```powershell
+python -c "import json; print('; '.join(f\"{c['name']}={c['value']}\" for c in json.load(open('cookies.json', encoding='utf-8'))))"
+```
+
+方式二：PowerShell：
+
+```powershell
+$c = Get-Content cookies.json -Raw | ConvertFrom-Json
+($c | ForEach-Object { "$($_.name)=$($_.value)" }) -join "; "
+```
+
+两种方式都会输出一行分号分隔的字符串，填进配置文件的 `"cookie"` 字段即可。
+
+**第 4 步：获取 user_agent**
+
+EditThisCookie 不提供 UA。在目标网站页面按 `F12` → 控制台输入 `navigator.userAgent` 回车，复制输出的字符串。（这一步不会触发什么值得买的 debugger 反调试——它只在打开 Sources 面板时循环暂停，控制台输一条命令不受影响；如果还是被卡住，按 `Ctrl+F8` 禁用断点后 `F8` 恢复即可。）
+
+**适用平台对照：**
+
+| 平台 | EditThisCookie 能否替代 F12 | 备注 |
+|---|---|---|
+| 🔐 看雪论坛 | ✅ 可以 | 在 bbs.kanxue.com 页面导出；`csrf_token` 仍需从页面源码或请求载荷里取 |
+| 📝 WPS Office | ✅ 可以 | 在 www.wps.cn 或 personal-act.wps.cn 页面导出 |
+| 💰 什么值得买 | ✅ 可以（强烈推荐） | 该站有 F12 反调试，扩展导出最省心 |
+| 🚚 顺丰 / 👟 鸿星尔克 | ❌ 不适用 | APP/小程序流量，浏览器扩展碰不到，仍需抓包 |
 
 ---
 
@@ -154,7 +219,7 @@
 
 需要字段：`cookie`、`csrf_token`、`user_agent`
 
-纯网页操作，浏览器就能搞定，无需抓包工具。
+纯网页操作，浏览器就能搞定，无需抓包工具。`cookie` 和 `user_agent` 也可以用 [EditThisCookie](#使用-editthiscookie-导出-cookie免-f12推荐) 直接导出；但 `csrf_token` 仍需按下面第 5 步获取。
 
 **获取步骤：**
 
@@ -241,7 +306,7 @@
 
 需要字段：`user_id`（数字）、`cookies`、`user_agent`
 
-纯网页操作，浏览器就能搞定。
+纯网页操作，浏览器就能搞定。`cookies` 和 `user_agent` 也可以用 [EditThisCookie](#使用-editthiscookie-导出-cookie免-f12推荐) 直接导出（在 www.wps.cn 页面上导出即可，`uid=` 字段会一并包含）。
 
 **获取步骤：**
 
@@ -282,12 +347,11 @@
 
 社区多个独立签到项目（Sitoi/dailycheckin 等）验证过：网页 Cookie 可以直接用于签到接口。
 
+> ⚠️ 什么值得买有 F12 反调试（打开开发者工具会不停弹出 `debugger` 断点），推荐用 EditThisCookie 扩展导出，绕开 F12。
+
 1. Chrome/Edge 打开 https://www.smzdm.com 并登录
-2. 按 `F12` → **Network（网络）** 标签 → 刷新页面
-3. 点击 Network 里第一条 `www.smzdm.com` 请求 → **Headers** → **Request Headers**：
-   - 复制 `Cookie:` 冒号后的整串 → 这就是 `cookie`
-   - 复制 `User-Agent:` 整串 → 这就是 `user_agent`
-4. `setting` 填空字符串 `""`
+2. 按 [使用 EditThisCookie 导出 Cookie](#使用-editthiscookie-导出-cookie免-f12推荐) 的四步操作，得到 `cookie` 字符串和 `user_agent`
+3. `setting` 填空字符串 `""`
 
 > ⚠️ 网页 Cookie 的适用范围：**每日签到大概率可用**；但本脚本的众测/互动任务走的是 APP 接口，网页 Cookie 可能失败。如果运行后只有众测任务报错、签到正常，说明网页 Cookie 够用；如果连签到都失败，改用方法 B。
 
