@@ -3,7 +3,7 @@ name: 多平台每日签到
 on:
   # 北京时间每天 08:00 触发（GitHub Actions 使用 UTC，所以是 UTC 00:00）
   schedule:
-    - cron: "12 0/6 * * *"
+    - cron: "12 0,6 * * *"
   # 允许在 Actions 页面手动运行（Settings → Secrets 中必须已配置 TOKEN_JSON 才能跑通）
   workflow_dispatch:
 
