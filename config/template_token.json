@@ -3,7 +3,7 @@
     "accounts": [
       {
         "account_name": "顺丰账号1",
-        "sign": "从 顺丰速运 APP/小程序 抓包获取的分享登录 sign 参数",
+        "sign": "从顺丰速运 APP/小程序抓包获取的分享登录 sign 参数",
         "channel": "weixin",
         "device_id": "顺丰设备 ID（deviceId）",
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
@@ -19,6 +19,79 @@
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
       }
     ]
+  },
+  "enshan": {
+    "accounts": [
+      {
+        "account_name": "恩山账号1",
+        "cookies": "恩山论坛登录后的完整 Cookie 字符串",
+        "formhash": "页面表单中的 formhash 值",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+      }
+    ]
+  },
+  "shyp": {
+    "accounts": [
+      {
+        "account_name": "上海杨浦账号1",
+        "token": "Authorization 头中的访问令牌（不含 Bearer 前缀）",
+        "device_id": "抓包请求头中的设备 ID",
+        "site_id": "站点 ID，例如 310110",
+        "user_agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/87.0.4280.101 Mobile Safari/537.36"
+      }
+    ]
+  },
+  "huaruntong": {
+    "999": {
+      "accounts": [
+        {
+          "account_name": "华润通账号1",
+          "token": "华润通登录后的访问令牌",
+          "mobile": "登录手机号（仅用于日志脱敏展示）",
+          "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+        }
+      ]
+    },
+    "huaruntong_wx": {
+      "accounts": [
+        {
+          "account_name": "华润通微信版账号1",
+          "answerResult": 1,
+          "channelId": "APP",
+          "merchantCode": "抓包获取的 merchantCode",
+          "storeCode": "抓包获取的 storeCode",
+          "sysId": "抓包获取的 sysId",
+          "transactionUuid": "抓包获取的 transactionUuid",
+          "inviteCode": "邀请码，可留空",
+          "token": "微信小程序登录后的访问令牌",
+          "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+        }
+      ]
+    },
+    "ole": {
+      "accounts": [
+        {
+          "account_name": "Ole账号1",
+          "session_id": "Ole 小程序的 session_id",
+          "device_name": "设备名称（抓包中的 device_name）",
+          "unique": "抓包获取的 unique 值",
+          "ole_wx_open_id": "Ole 小程序的微信 open_id",
+          "shop_code": "门店编码",
+          "city_id": "城市 ID",
+          "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+        }
+      ]
+    },
+    "wentiweilaihui": {
+      "accounts": [
+        {
+          "account_name": "文体未来荟账号1",
+          "token": "文体未来荟登录后的访问令牌",
+          "mobile": "登录手机号（仅用于日志脱敏展示）",
+          "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+        }
+      ]
+    }
   },
   "erke": {
     "accounts": [
@@ -46,10 +119,53 @@
   "smzdm": {
     "accounts": [
       {
-        "name": "smzdm 账号1",
+        "name": "什么值得买账号1",
         "cookie": "什么值得买 APP/网页登录后的完整 Cookie 字符串",
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
         "setting": "什么值得买 setting 加密字段（抓包请求体中携带）"
+      }
+    ]
+  },
+  "dachao": {
+    "debug": false,
+    "accounts": [
+      {
+        "account_name": "大潮账号1",
+        "phone_number": "登录手机号",
+        "password_encrypted": "登录密码（脚本按客户端方式加密后提交）",
+        "tenant_id": "94",
+        "client_id": "10048",
+        "session_id": "抓包请求头中的 X-SESSION-ID（约 24 位 hex 字符串）",
+        "user_agent": "大潮 APP 的 User-Agent"
+      }
+    ]
+  },
+  "workbuddy": {
+    "accounts": [
+      {
+        "account_name": "主号",
+        "email": "登录邮箱",
+        "access_token": "访问令牌（可用 import_accounts.py 导入后自动填充）",
+        "refresh_token": "刷新令牌（可用 import_accounts.py 导入后自动填充）",
+        "uid": "用户 ID",
+        "enterprise_id": "企业 ID，可留空",
+        "domain": "接口域名，可留空"
+      }
+    ]
+  },
+  "trae": {
+    "accounts": [
+      {
+        "account_name": "主号",
+        "sessionid": "浏览器 Cookie 中 sessionid 的值（约 60 天有效，推荐）"
+      }
+    ]
+  },
+  "agentrouter": {
+    "accounts": [
+      {
+        "account_name": "主号",
+        "github_session": "GitHub 登录后的 user_session 值"
       }
     ]
   }
