@@ -1,16 +1,30 @@
 # Cat-Checkin 🐱
 
-每日多平台自动签到脚本，已改造为 GitHub Actions 友好版本。
+多平台每日自动签到，**GitHub Actions 友好**版本：无交互式输入、配置全部来自 Secrets / 环境变量、
+按平台并行执行、单平台超时与重试可控、退出码与任务状态一一对应。
 
-仅保留以下 5 个签到任务：
+脚本主体同步自上游 ZaiZaiCat-Checkin，与上游的差异只保留「CI 适配」与「安全收口」两类，
+逐文件差异与取舍理由见仓库根目录的 `SYNC_REPORT.md`。
 
-| 平台           | 入口脚本                              | 说明                  |
-|--------------|-----------------------------------|---------------------|
-| 🚚 顺丰速运      | `script/sf/main.py`               | 签到 + 积分任务         |
-| 🔐 看雪论坛      | `script/kanxue/sign_in.py`        | 每日签到                |
-| 👟 鸿星尔克      | `script/erke/main.py`             | 签到 + 积分明细查询        |
-| 📝 WPS Office  | `script/wps/main.py`              | 任务中心 + 天天领福利       |
-| 💰 什么值得买     | `script/smzdm/sign_daily_task/main.py` | 每日签到 + 众测/互动任务     |
+## ✅ 平台清单
+
+| 平台 | 入口脚本 | 定时任务 | 说明 |
+|---|---|---|---|
+| 🚚 顺丰速运 | `script/sf/main.py` | ✅ | 签到 + 积分任务（需 Node.js） |
+| 🔐 看雪论坛 | `script/kanxue/sign_in.py` | ✅ | 每日签到 |
+| 📱 恩山论坛 | `script/enshan/sign_in.py` | ✅ | 每日签到 |
+| 📺 上海杨浦 | `script/shyp/main.py` | ✅ | 任务列表与积分任务 |
+| 🏢 华润通-万象星 | `script/huaruntong/999/main.py` | ✅ | 答题签到 |
+| 💳 华润通-微信版 | `script/huaruntong/huaruntong_wx/main.py` | ✅ | 签到送积分 |
+| 🎯 华润通-文体未来荟 | `script/huaruntong/wentiweilaihui/main.py` | ✅ | 签到与积分查询 |
+| 🛒 华润通-Ole' | `script/huaruntong/ole/main.py` | ❌ | 需动态获取微信 code 换 token，不适合无人值守 |
+| 👟 鸿星尔克 | `script/erke/main.py` | ✅ | 签到 + 积分明细查询 |
+| 📝 WPS Office | `script/wps/main.py` | ✅ | 任务中心 + 天天领福利 |
+| 💰 什么值得买 | `script/smzdm/sign_daily_task/main.py` | ✅ | 每日签到 + 众测/互动任务 |
+| 🌊 大潮 App | `script/dachao/main.py` | ✅ | 签到 + 阅读 + 抽奖（耗时较长） |
+| 🤖 WorkBuddy | `script/workbuddy/main.py` | ✅ | 签到、令牌自动续期 |
+| 🐅 Trae CN | `script/trae/main.py` | ✅ | 积分模式每日签到 |
+| 🚀 Agent Router | `script/agentrouter/main.py` | ✅ | OAuth 登录即签到、余额查询 |
 
 > **⚠️ 免责声明**
 > 本项目中的大量代码由 AI 辅助编写生成，代码规范和格式可能存在不足之处，敬请见谅。
@@ -23,21 +37,22 @@
 
 ### 2. 准备 `config/token.json`
 
-每个平台的字段含义见 [`config/token.json.example`](config/token.json.example)。下面是填写模板：
+唯一权威模板是 [`config/template_token.json`](config/template_token.json)，已按平台节点列全字段与中文说明。
+复制一份另存为 `config/token.json`，只保留你要跑的平台的账号（未配置的平台会被工作流自动跳过）。
 
-```json
-{
-  "sf":     { "accounts": [{ "account_name": "...", "sign": "...", "channel": "weixin", "device_id": "...", "user_agent": "..." }] },
-  "kanxue": { "accounts": [{ "account_name": "...", "cookie": "...", "csrf_token": "...", "user_agent": "..." }] },
-  "erke":   { "accounts": [{ "account_name": "...", "member_id": "...", "enterprise_id": "...", "unionid": "...", "openid": "...", "wx_openid": "...", "user_agent": "..." }] },
-  "wps":    { "accounts": [{ "account_name": "...", "user_id": 123, "cookies": "...", "user_agent": "..." }] },
-  "smzdm":  { "accounts": [{ "name": "...", "cookie": "...", "user_agent": "...", "setting": "..." }] }
-}
+先在本地做一次结构自检，比在 CI 上试错快得多：
+
+```bash
+python ci/platform_guard.py --config config/token.json --validate
 ```
 
-各平台字段的详细获取方法见下方 [🔑 账号信息获取教程](#-账号信息获取教程)。
+输出会列出每个平台的账号数与「已配置 / 未配置」，并且不会打印任何凭据内容。
 
-填好之后，用 base64 编码整个 JSON 文件，方便作为 Secret 填入：
+**只跑看雪 / WPS / 什么值得买**：可直接从
+[`config/token.kanxue-wps-smzdm.json`](config/token.kanxue-wps-smzdm.json) 起步——三个节点已备好，
+只需填凭据字段（留空表示未配置，工作流会跳过）。三个平台的字段获取方法见下方对应教程。
+
+然后编码为 Secret（也支持直接粘贴 JSON 原文，工作流会自动识别）：
 
 - macOS / Linux：`base64 -w0 config/token.json`
 - Windows PowerShell：
@@ -45,27 +60,48 @@
   [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("config/token.json"))
   ```
 
-把输出整段复制下来。
+各平台字段的获取方法见下方 [🔑 账号信息获取教程](#-账号信息获取教程)。
 
 ### 3. 配置 GitHub Secrets
 进入你 fork 的仓库页面：**Settings → Secrets and variables → Actions → New repository secret**。
 
-| Secret 名称       | 必填 | 内容                                                                  |
-|------------------|------|---------------------------------------------------------------------|
-| `TOKEN_JSON`     | 是   | 第 2 步生成的 base64 字符串                                                 |
-| `NOTIFICATION_JSON` | 否   | 同上方式生成 `config/notification.json` 的 base64 编码；不需要推送通知就跳过            |
+| Secret 名称 | 必填 | 内容 |
+|---|---|---|
+| `TOKEN_JSON` | 是 | `config/token.json` 的 base64 编码，或直接粘贴 JSON 原文 |
+| `NOTIFICATION_JSON` | 否 | `config/notification.json` 的 base64 编码或 JSON 原文；不推送可跳过 |
 
-可选的推送通道（对应 `notification.json`）支持 Bark、Server 酱、PushPlus、Telegram、飞书、钉钉、企业微信、Gotify、Ntfy、PushDeer 等十余种，详见 [`config/template_notification.json`](config/template_notification.json)。
+推送也可改用环境变量注入（与 `NOTIFICATION_JSON` 二选一，工作流已把常用通道映射进来）：
+`BARK_PUSH`、`BARK_ICON`、`BARK_SOUND`、`BARK_GROUP`、`BARK_LEVEL`、`BARK_URL`、`SCKEY`、`SENDKEY`、
+`PUSHPLUS_TOKEN`、`PUSHPLUS_TOPIC`、`TG_BOT_TOKEN`、`TG_USER_ID`、`TG_API_HOST`、`FSKEY`、
+`DINGTALK_ACCESS_TOKEN`、`DINGTALK_SECRET`、`QYWX_KEY`、`QYWX_ORIGIN`、`GOTIFY_URL`、`GOTIFY_TOKEN`、
+`NTFY_URL`、`NTFY_TOPIC`、`PUSHDEER_PUSHKEY`。
+其余通道（CoolPush、Qmsg、企业微信应用等）请用 `NOTIFICATION_JSON`，字段见
+[`config/template_notification.json`](config/template_notification.json)。
 
 ### 4. 启用 Workflow
 进入 **Actions** 标签页，点击 **"I understand my workflows, go ahead and enable them"** 启用工作流。
 
-- 定时触发：每天北京时间 08:00（UTC 00:00）自动执行
-- 手动触发：**Actions → 多平台每日签到 → Run workflow**
+- 定时触发：北京时间每天 08:12 与 14:12 各一次
+- 手动触发：**Actions → 多平台每日签到 → Run workflow**，支持两个输入
+  - `platforms`：只跑指定平台，key 用英文逗号分隔，例如 `sf,wps,trae`
+  - `dry_run`：只校验配置与依赖，不执行签到
 
-### 5. 查看执行结果
-- **Actions** 标签页里查看每次运行的日志
-- 失败时，工作流会把 `config/` 目录和日志打包成 `checkin-logs` 工件，可在运行详情页底部下载
+### 5. 执行模型与可调参数
+
+- `prepare` 任务先校验 `config/token.json`，并只把「已配置账号」的平台放进矩阵；未配置的平台直接跳过，不会让工作流变红
+- `checkin` 任务按平台拆成独立 job（`max-parallel: 4`，`fail-fast: false`），单平台失败不影响其他平台，红色只代表该平台本身失败
+- 单平台超时由矩阵控制（`script/*` 对应的 `timeout` 字段，300–1800 秒），外层 job 上限 40 分钟
+- 重试默认关闭（签到/答题接口普遍非幂等，盲目重试会造成重复提交）。需要时在
+  **Settings → Secrets and variables → Actions → Variables** 添加：
+  - `CHECKIN_RETRY_MAX`：最大尝试次数，默认 `1`
+  - `CHECKIN_RETRY_DELAY_SECONDS`：重试等待基数，默认 `15`
+- Trae / WorkBuddy 脚本自带的启动抖动在 CI 中固定为 `0`（见工作流 `env`），如需错峰改为 `600` 即可，无需改代码
+
+### 6. 查看执行结果
+- **Actions** 标签页按平台展示 job 状态，点进去可看完整日志
+- 每次 job 会写一张摘要表到运行详情页（平台、入口、是否已配置、账号数、超时、状态）
+- 失败时上传 `logs-<平台key>` 工件（`**/*.log`，保留 7 天）。
+  出于安全考虑，**`config/` 目录不再作为工件上传**——其中含可直接复用的登录凭据
 
 ## 🔑 账号信息获取教程
 
@@ -389,6 +425,25 @@ EditThisCookie 不提供 UA。在目标网站页面按 `F12` → 控制台输入
 
 ---
 
+### 🧩 其他平台（上游新增）
+
+以下平台的字段差异较大，各自的取值与限制写在对应子目录的 README 里，避免本文档失焦：
+
+| 平台 | 取值说明 | 备注 |
+|---|---|---|
+| 📱 恩山论坛 | `script/enshan`：`cookies` + `formhash` + `user_agent` | 纯浏览器 F12 即可 |
+| 📺 上海杨浦 | `script/shyp`：`token` + `device_id` + `site_id` + `user_agent` | `token` 取自请求头 `Authorization` |
+| 🏢 华润通系（4 个） | `config/template_token.json` 的 `huaruntong.*` 节点 | `ole` 需动态换 code，未纳入定时任务 |
+| 🌊 大潮 App | `config/template_token.json` 的 `dachao` 节点：手机号 + 加密口令 + `session_id` + `user_agent` | 阅读任务耗时较长，单平台超时 1800 秒 |
+| 🤖 WorkBuddy | [script/workbuddy/README.md](script/workbuddy/README.md) | 可先用 `import_accounts.py` 在本机导入，再贴进 Secret |
+| 🐅 Trae CN | [script/trae/README.md](script/trae/README.md) | 推荐只配 `sessionid`（约 60 天有效） |
+| 🚀 Agent Router | [script/agentrouter/README.md](script/agentrouter/README.md) | 配 GitHub `user_session` |
+
+> `script/workbuddy/import_accounts.py`、`script/trae/import_accounts.py`、`script/trae/web_checkin.py`
+> 是**本地工具**：依赖本机客户端目录或命令行参数，仅供本机导入/排障，不参与 CI，也不在定时任务里调用。
+
+---
+
 ### ⚠️ 安全提醒
 
 - `cookie` / `sign` / `setting` 等字段等同于你的登录凭证，**不要截图发到群里、不要提交到公开仓库**
@@ -397,41 +452,51 @@ EditThisCookie 不提供 UA。在目标网站页面按 `F12` → 控制台输入
 
 ## 🔧 本地运行（可选）
 
-需要 Python 3.11+ 与 Node.js 18+（顺丰脚本需要执行 JavaScript）。
+需要 Python 3.11+ 与 Node.js 20+（顺丰脚本需要执行 JavaScript；CI 固定使用 Node.js 24）。
 
 ```bash
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 准备配置
-cp config/token.json.example config/token.json
-# 用编辑器填好真实账号信息
+# 2. 准备配置（唯一模板是 config/template_token.json）
+cp config/template_token.json config/token.json
+# 用编辑器填好真实账号信息，并做一次结构自检
+python ci/platform_guard.py --config config/token.json --validate
 
-# 3. 运行（可指定单个平台）
+# 3. 运行（任选平台；脚本均按仓库根目录定位配置，可在任意 cwd 下执行）
 python script/sf/main.py
 python script/kanxue/sign_in.py
 python script/erke/main.py
 python script/wps/main.py
 python script/smzdm/sign_daily_task/main.py
+
+# 4. 本地模拟 CI 的入口包装（超时 + 重试 + 退出码）
+ENTRY_TIMEOUT_SECONDS=300 RETRY_MAX=1 bash ci/run_entry.sh script/kanxue/sign_in.py
 ```
 
 ## 📁 项目结构
 
 ```
-ZaiZaiCat-Checkin/
-├── .github/workflows/checkin.yml   # GitHub Actions 工作流
+Cat-Checkin/
+├── .github/
+│   ├── workflows/checkin.yml        # 定时 + 手动触发，按平台矩阵执行
+│   └── actions/prepare-config/      # 复用动作：从 Secrets 还原并校验配置
+├── ci/
+│   ├── platform_guard.py            # 平台守卫：配置校验 / 矩阵生成 / 是否已配置
+│   └── run_entry.sh                 # 统一入口包装：超时、重试、退出码
 ├── config/
-│   ├── template_notification.json  # 推送配置模板（含全部字段说明）
-│   ├── template_token.json         # 账号配置模板（与代码字段对齐）
-│   ├── token.json.example          # 同上的副本，提交到仓库供用户参考
-│   └── token.json                  # ⚠️ 真实配置，已被 .gitignore 排除
+│   ├── template_notification.json   # 推送配置模板（含全部字段说明）
+│   ├── template_token.json          # 账号配置模板（15 个平台节点，唯一权威）
+│   └── token.json                   # ⚠️ 真实配置，已被 .gitignore 排除
 ├── script/
-│   ├── sf/main.py                  # 顺丰速运
-│   ├── kanxue/sign_in.py           # 看雪论坛
-│   ├── erke/main.py                # 鸿星尔克
-│   ├── wps/main.py                 # WPS Office
-│   └── smzdm/sign_daily_task/main.py  # 什么值得买
-├── notification.py                 # 推送模块（Bark、Server 酱、PushPlus 等）
+│   ├── sf/                          # 顺丰速运（含 code.js，需 Node.js）
+│   ├── kanxue/  enshan/  erke/      # 看雪 / 恩山 / 鸿星尔克
+│   ├── wps/  smzdm/  shyp/          # WPS / 什么值得买 / 上海杨浦
+│   ├── huaruntong/{999,huaruntong_wx,ole,wentiweilaihui}/
+│   ├── dachao/                      # 大潮 App（含 captcha、http_debug）
+│   ├── workbuddy/  trae/            # 含本地导入工具 import_accounts.py
+│   └── agentrouter/
+├── notification.py                  # 推送模块（文件 > 环境变量 > 默认值）
 ├── requirements.txt
 └── README.md
 ```
@@ -449,6 +514,26 @@ A：编辑 `.github/workflows/checkin.yml` 中的 `cron` 表达式。GitHub Acti
 
 **Q：为什么不在仓库里直接放 token.json？**
 A：会把包含 Cookie / 账号敏感信息的文件提交到公开仓库，会有泄露风险。工作流在执行时通过 Secret 解码生成该文件，运行结束后随 Runner 一起销毁。
+
+**Q：我只配置了 3 个平台，其余平台的 job 会报错吗？**
+A：不会。`prepare` 任务只把「账号数 > 0」的平台放进矩阵，未配置的平台根本不会创建 job；
+判断逻辑在 `ci/platform_guard.py`，它会把仍是模板占位值的字段视为未配置。
+
+**Q：新增平台 / 上游同步后，怎么把它接进 CI？**
+A：在 `ci/platform_guard.py` 的 `PLATFORMS` 表里加一条（key、入口、配置路径、必填凭据字段、超时），
+再在 `config/template_token.json` 补上对应节点即可，工作流本身不用改。
+
+**Q：某个平台 job 显示 124 / 超时怎么办？**
+A：124 来自 `timeout` 命令，表示该平台超过矩阵里的 `timeout` 秒。调大对应平台超时，
+或排查脚本是否卡在网络重试；`dachao` 因含阅读等待默认给到 1800 秒。
+
+**Q：失败工件里为什么没有 config/ 了？**
+A：旧版本会把 `config/` 一并上传，等于把可直接复用的登录凭据写进工件。现在只上传 `**/*.log`；
+需要排查配置问题时，请在本地用 `python ci/platform_guard.py --validate` 复现。
+
+**Q：为什么 `script/shyp/auto_buy.py` 没有同步过来？**
+A：该文件把一枚真实 JWT（含手机号）硬编码在源码里，属于凭据泄露，且定时抢购不适合无人值守执行。
+如需使用，请改为从配置读取，并在上游删除历史提交中的该凭据。
 
 ## 📄 开源协议
 本项目采用 [MIT License](LICENSE) 开源协议。

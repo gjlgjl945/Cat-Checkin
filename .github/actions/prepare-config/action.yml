@@ -1,0 +1,120 @@
+name: 还原运行配置
+description: >-
+  从 Secrets 还原 config/token.json 与 config/notification.json。
+  Secret 内容支持 base64 编码或直接粘贴 JSON 原文，二者自动识别。
+  仅落盘与校验，不回显任何凭据内容。
+
+inputs:
+  token_json:
+    description: token.json 内容（base64 或 JSON 原文）
+    required: true
+  notification_json:
+    description: notification.json 内容（base64 或 JSON 原文），留空则跳过
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # 用 Python 而不是 shell 做解码：base64 校验、JSON 解析、权限设置都在一处，
+    # 也避免 YAML 块缩进把 heredoc 终止符推离行首导致语法错误。
+    - name: 写入并校验 config/token.json
+      shell: bash
+      env:
+        TOKEN_JSON: ${{ inputs.token_json }}
+      run: |
+        python - <<'PY'
+        import base64
+        import json
+        import os
+        import sys
+
+        raw = os.environ.get("TOKEN_JSON", "").strip()
+        if not raw:
+            print("::error::缺少 Secret: TOKEN_JSON。请在 Settings → Secrets and variables → Actions 中添加。")
+            sys.exit(1)
+
+        if raw.startswith("{"):
+            text = raw
+        else:
+            try:
+                text = base64.b64decode("".join(raw.split()), validate=True).decode("utf-8")
+            except Exception as exc:
+                print(f"::error::TOKEN_JSON 既不是 JSON 原文，也无法按 base64 解码: {exc}")
+                sys.exit(1)
+
+        try:
+            data = json.loads(text)
+        except Exception as exc:
+            print(f"::error::config/token.json 解析失败: {exc}")
+            sys.exit(1)
+        if not isinstance(data, dict):
+            print("::error::config/token.json 顶层必须是 JSON 对象")
+            sys.exit(1)
+
+        os.makedirs("config", exist_ok=True)
+        path = os.path.join("config", "token.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+        keys = sorted(key for key, value in data.items() if isinstance(value, dict))
+        print(f"已生成 {path}，顶层节点 {len(keys)} 个：{', '.join(keys)}")
+        PY
+
+    - name: 写入并校验 config/notification.json
+      shell: bash
+      env:
+        NOTIFICATION_JSON: ${{ inputs.notification_json }}
+      run: |
+        python - <<'PY'
+        import base64
+        import json
+        import os
+        import sys
+
+        raw = os.environ.get("NOTIFICATION_JSON", "").strip()
+        if raw:
+            if raw.startswith("{"):
+                text = raw
+            else:
+                try:
+                    text = base64.b64decode("".join(raw.split()), validate=True).decode("utf-8")
+                except Exception as exc:
+                    print(f"::error::NOTIFICATION_JSON 既不是 JSON 原文，也无法按 base64 解码: {exc}")
+                    sys.exit(1)
+
+            try:
+                data = json.loads(text)
+            except Exception as exc:
+                print(f"::error::config/notification.json 解析失败: {exc}")
+                sys.exit(1)
+            if not isinstance(data, dict):
+                print("::error::config/notification.json 顶层必须是 JSON 对象")
+                sys.exit(1)
+
+            os.makedirs("config", exist_ok=True)
+            path = os.path.join("config", "notification.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+            print(f"已生成 {path}，推送通道 {len(data)} 个：{', '.join(sorted(data))}")
+        else:
+            print("::notice::未提供 NOTIFICATION_JSON，改用环境变量或直接跳过推送")
+
+        env_channels = [
+            name for name in (
+                "BARK_PUSH", "SCKEY", "SENDKEY", "PUSHPLUS_TOKEN", "TG_BOT_TOKEN",
+                "FSKEY", "DINGTALK_ACCESS_TOKEN", "QYWX_KEY", "GOTIFY_URL",
+                "NTFY_URL", "PUSHDEER_PUSHKEY",
+            ) if os.environ.get(name)
+        ]
+        if env_channels:
+            print("::notice::检测到通过环境变量注入的推送通道：" + ", ".join(env_channels))
+        PY

@@ -58,7 +58,14 @@ def setup_logger():
     )
 
     # 文件处理器 - 详细日志
-    file_handler = logging.FileHandler('../smzdm_task.log', encoding='utf-8', mode='a')
+    # 注意：日志路径不能依赖进程工作目录。原实现用 '../smzdm_task.log'，在 CI 中
+    # cwd 是仓库根目录，日志会落到 workspace 之外，失败工件永远抓不到。
+    # 这里改为「script/smzdm 目录」，并允许用 SMZDM_LOG_PATH 覆盖。
+    log_path = os.environ.get('SMZDM_LOG_PATH') or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'smzdm_task.log'
+    )
+    os.makedirs(os.path.dirname(log_path) or '.', exist_ok=True)
+    file_handler = logging.FileHandler(log_path, encoding='utf-8', mode='a')
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(log_formatter)
 

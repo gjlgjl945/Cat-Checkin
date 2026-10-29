@@ -1,10 +1,19 @@
-# ZaiZaiCat-Checkin 运行依赖
-# Python 端依赖
-requests>=2.31.0
-PyExecJS2>=1.5.1
-pycryptodome>=3.19.0
-Pillow>=10.0.0
+# Cat-Checkin 运行依赖（同步自 ZaiZaiCat-Checkin）
+#
+# 版本策略：只约束下限，交由 pip 在 CI 上解析最新兼容版本；
+# 升级前请在本仓库执行 `.github/workflows/checkin.yml` 的手动触发做一次全量验证。
 
-# Node.js 端依赖（仅顺丰速运脚本需要执行 code.js）
-# GitHub Actions 工作流通过 setup-node 安装 Node.js 18，无需 Python 包，
-# 但本地直接运行时请确保系统已安装 Node.js >= 16。
+# ---- 通用 HTTP / 加密 ----
+requests>=2.31.0
+certifi>=2024.2.2          # agentrouter 合并 CA 根证书用；其余脚本走 requests 默认 CA
+pycryptodome>=3.19.0       # wps / huaruntong_wx / 本地账号导入工具
+
+# ---- 图像 / 数值 ----
+Pillow>=10.0.0             # smzdm 验证码与图片处理
+numpy>=1.26.0              # dachao 验证码识别
+
+# ---- JS 运行时桥接 ----
+PyExecJS2>=1.5.1           # sf 需执行 script/sf/code.js
+
+# ---- 非 Python 依赖 ----
+# Node.js >= 20：仅 sf 需要（执行 code.js）。CI 由 setup-node@v7 提供 Node.js 24，本地请自行安装。
