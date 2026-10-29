@@ -10,6 +10,7 @@ cron: 1 1 1 1 1
 版本：2.0
 """
 
+import argparse
 import json
 import logging
 import time
@@ -87,7 +88,7 @@ logger = setup_logger()
 class SmzdmTaskManager:
     """什么值得买任务管理器"""
 
-    def __init__(self):
+    def __init__(self, config_path=None):
         """
 
         初始化任务管理器
@@ -95,11 +96,9 @@ class SmzdmTaskManager:
         Args:
             config_path: 配置文件路径，默认为项目根目录下的config/token.json
         """
-        # 使用全局变量并转换为Path对象
-        root_path = Path(project_root)
-        config_path = root_path / "config" / "token.json"
-
-        self.config_path = config_path
+        # 显式传入时按传入路径读取（便于 CI / 本地用临时配置做验证）；
+        # 不传则仍按仓库根目录定位，保持原有「可在任意 cwd 运行」的行为
+        self.config_path = Path(config_path) if config_path else Path(project_root) / "config" / "token.json"
         self.site_name = "什么值得买"
         self.accounts = []
         self.account_results = []  # 收集每个账号的执行结果
@@ -119,7 +118,14 @@ class SmzdmTaskManager:
 
                 # 获取什么值得买的配置
                 smzdm_config = config.get('smzdm', {})
-                self.accounts = smzdm_config.get('accounts', [])
+                raw_accounts = smzdm_config.get('accounts', [])
+                if not isinstance(raw_accounts, list):
+                    raise ValueError("配置项 smzdm.accounts 必须是数组")
+                # 丢弃非对象条目，避免一条写错的配置让整轮任务崩在 .get() 上
+                skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
+                self.accounts = [item for item in raw_accounts if isinstance(item, dict)]
+                if skipped:
+                    logger.warning(f"忽略 {skipped} 条非对象格式的账号配置")
 
                 if not self.accounts:
                     logger.warning("配置文件中没有找到什么值得买账号信息")
@@ -610,13 +616,16 @@ class SmzdmTaskManager:
             content = "\n".join(content_parts)
 
             # 发送推送
-            send_notification(
+            delivered = send_notification(
                 title=title,
                 content=content,
                 sound=NotificationSound.BIRDSONG,
                 group=self.site_name
             )
-            logger.info(f"✅ {self.site_name}任务汇总推送发送成功")
+            if delivered:
+                logger.info(f"✅ {self.site_name}任务汇总推送发送成功: {', '.join(delivered)}")
+            else:
+                logger.info("未配置可用的推送通道，跳过通知")
 
         except Exception as e:
             logger.error(f"❌ 发送任务汇总推送失败: {str(e)}", exc_info=True)
@@ -717,8 +726,8 @@ class SmzdmTaskManager:
         finally:
             api.close()
 
-    def run(self):
-        """运行任务管理器"""
+    def run(self) -> Dict[str, int]:
+        """运行任务管理器，返回汇总计数供调用方决定退出码"""
         start_time = datetime.now()
 
         logger.info("\n" + "="*60)
@@ -728,7 +737,7 @@ class SmzdmTaskManager:
 
         if not self.accounts:
             logger.error("❌ 没有配置任何账号，请检查配置文件\n")
-            return
+            return self.stats()
 
         logger.info(f"📝 共配置 {len(self.accounts)} 个账号\n")
 
@@ -767,10 +776,23 @@ class SmzdmTaskManager:
         logger.info(f"⏰ {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"⏱️  总耗时: {duration.total_seconds():.2f} 秒")
         logger.info("="*60 + "\n")
+        return self.stats()
+
+    def stats(self) -> Dict[str, int]:
+        """汇总账号级结果；failed = 未成功的账号数（含配置不完整）"""
+        total = len(self.account_results)
+        success = sum(1 for item in self.account_results if item.get('success'))
+        return {'total': total, 'success': success, 'failed': total - success}
 
 
 def main():
-    """主函数"""
+    """主函数。退出码：0 全部成功，1 存在失败账号或运行异常。"""
+    parser = argparse.ArgumentParser(description="什么值得买每日任务")
+    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--allow-failures", action="store_true",
+                        help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")
+    args = parser.parse_args()
+
     # 记录开始时间
     start_time = datetime.now()
     print(f"\n{'='*60}")
@@ -784,10 +806,10 @@ def main():
 
     try:
         # 创建任务管理器（默认读取 config/token.json）
-        manager = SmzdmTaskManager()
+        manager = SmzdmTaskManager(config_path=args.config)
 
         # 运行任务
-        manager.run()
+        stats = manager.run()
 
         # 记录结束时间
         end_time = datetime.now()
@@ -808,6 +830,14 @@ def main():
         if manager.account_results:
             manager.send_task_notification(start_time, end_time)
 
+        failed = stats.get('failed', 0)
+        if failed and not args.allow_failures:
+            print(f"❌ {failed}/{stats.get('total', 0)} 个账号执行失败，退出码 1"
+                  f"（可用 --allow-failures 关闭该行为）")
+            return 1
+        if stats.get('total', 0) == 0:
+            print("❌ 没有可执行的什么值得买账号")
+            return 1
         return 0
 
     except Exception as e:
@@ -836,7 +866,8 @@ def main():
                 sound=NotificationSound.ALARM,
                 group="什么值得买"
             )
-        except:
+        except Exception:
+            # 通知失败不影响退出码：真正的失败原因已经写进日志与返回值
             pass
 
         return 1

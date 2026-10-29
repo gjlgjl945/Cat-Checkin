@@ -73,8 +73,12 @@ python ci/platform_guard.py --config config/token.json --validate
 ### 5. 执行模型与可调参数
 
 - `prepare` 任务先校验 `config/token.json`，配置不合法立即失败，避免四个平台 job 一起报错
+- `prepare` 还会做一次**矩阵一致性校验**（`--check-matrix`）：平台注册表与 workflow 静态矩阵必须逐行相同，
+  否则「加了平台却忘记加矩阵」会静默不执行。漂移时按提示跑 `python ci/platform_guard.py --sync-matrix` 修复
 - `checkin` 使用**静态矩阵**（平台清单写在 workflow 里）。每个 job 在装依赖之前先跑 `ci/platform_guard.py` 自查：账号数为 0、或不在 `platforms` 输入范围内的平台直接跳过，不会让工作流变红
 - 之所以不用动态矩阵：`prepare` 加载了 `TOKEN_JSON`，GitHub 会在作业结束时丢弃「疑似包含 Secret」的作业输出，下游 `fromJSON` 只能拿到空串并报 `empty input`；静态矩阵彻底绕开这个耦合
+- **退出码即事实**：四个平台脚本在「存在失败账号」时返回 1（job 变红），全部成功或今日已签才返回 0；
+  本地调试若不想让失败显红，加 `--allow-failures`
 - 单平台超时由矩阵控制（300–1500 秒），外层 job 上限 40 分钟
 - 重试默认关闭（签到/答题接口普遍非幂等，盲目重试会造成重复提交）。需要时在
   **Settings → Secrets and variables → Actions → Variables** 添加：
@@ -327,15 +331,26 @@ cp config/template_token.json config/token.json
 # 用编辑器填好真实账号信息，并做一次结构自检
 python ci/platform_guard.py --config config/token.json --validate
 
-# 3. 运行（任选平台；脚本均按仓库根目录定位配置，可在任意 cwd 下执行）
+# 3. 运行（任选平台；脚本默认按仓库根目录定位配置，可在任意 cwd 下执行）
 python script/kanxue/sign_in.py
 python script/wps/main.py
 python script/smzdm/sign_daily_task/main.py
 python script/trae/main.py --dry-run
 
+# 验证时可指向临时配置，避免动到真实凭据
+python script/kanxue/sign_in.py --config /tmp/token.test.json
+
 # 4. 本地模拟 CI 的入口包装（超时 + 重试 + 退出码）
 ENTRY_TIMEOUT_SECONDS=300 RETRY_MAX=1 bash ci/run_entry.sh script/kanxue/sign_in.py
 ```
+
+四个平台脚本的参数一致：
+
+| 参数 | 作用 |
+|---|---|
+| `--config PATH` | 指定配置文件，默认 `config/token.json` |
+| `--allow-failures` | 有失败账号时仍返回 0（默认返回 1，便于 CI 报红） |
+| `--dry-run` | 只查状态不领取（仅 Trae 支持；其余平台接口无独立的状态查询） |
 
 ## 📁 项目结构
 
@@ -345,7 +360,7 @@ Cat-Checkin/
 │   ├── workflows/checkin.yml        # 定时 + 手动触发，按平台矩阵执行
 │   └── actions/prepare-config/      # 复用动作：从 Secrets 还原并校验配置
 ├── ci/
-│   ├── platform_guard.py            # 平台守卫：配置校验 / 平台筛选 / 是否已配置
+│   ├── platform_guard.py            # 平台守卫：配置校验 / 平台筛选 / 矩阵一致性校验
 │   └── run_entry.sh                 # 统一入口包装：超时、重试、退出码
 ├── config/
 │   ├── template_notification.json   # 推送配置模板（含全部字段说明）
@@ -355,7 +370,7 @@ Cat-Checkin/
 │   ├── kanxue/                      # 看雪论坛
 │   ├── wps/                         # WPS Office（任务中心 + 天天领福利）
 │   ├── smzdm/                       # 什么值得买
-│   └── trae/                        # Trae CN（含本地导入/验证工具）
+│   └── trae/                        # Trae CN（含本机账号导入工具）
 ├── notification.py                  # 推送模块（文件 > 环境变量 > 默认值）
 ├── requirements.txt
 └── README.md
@@ -381,8 +396,22 @@ A：不会。矩阵是固定清单，但每个 job 先跑 `ci/platform_guard.py`
 **Q：某个平台 job 显示 124 / 超时怎么办？**
 A：124 来自 `timeout` 命令，表示该平台超过矩阵里的 `timeout` 秒。调大对应平台超时，或排查脚本是否卡在网络重试。
 
-**Q：Trae 的 job 失败但日志里只有一个账号报错？**
-A：Trae 脚本现在以「是否有失败账号」决定退出码：任一账号失败即返回 1，job 会变红。若你只想要通知、不想让 job 报红，在脚本参数里加 `--allow-failures`（工作流里可通过矩阵 env 传入）。
+**Q：某个账号失败会不会把整个 job 弄红？**
+A：会，而且这是刻意的。四个平台脚本都以「是否存在失败账号」决定退出码：全部成功或今日已签返回 0，任一账号失败返回 1。
+这样 Actions 上的绿色才代表「真的都签到了」。只想收到通知、不想报红时，本地加 `--allow-failures`。
+
+**Q：没有任何账号被执行时为什么也算失败？**
+A：退出码 1。因为「跑了但什么都没做」和「跑成功了」是两件事，前者需要你检查配置（字段没填、占位值没换、region 过滤后为空等）。
+如果确实只想跑空转验证，用 `--allow-failures`。
+
+**Q：怎么做一次不发推送的演练？**
+A：设置环境变量 `NOTIFICATION_DISABLED=1`，所有推送通道都会被跳过，日志里会明确写「未配置可用的推送通道 / 已跳过」。
+平时日志里若出现「推送通知已发送: Bark」这样的行，说明确实有通道返回了成功；没有通道时不会再假装发送成功。
+
+**Q：新增一个平台要改哪些地方？**
+A：两处必须一起改（漏改会被 CI 拦下）：① `ci/platform_guard.py` 的 `PLATFORMS` 加一行；
+② 执行 `python ci/platform_guard.py --sync-matrix` 把注册表同步到工作流矩阵。
+`prepare` 作业里的 `--check-matrix` 会在起 job 之前校验这两处一致，漂移时直接失败并打印差异行。
 
 **Q：失败工件里为什么没有 config/？**
 A：旧版本会把 `config/` 一并上传，等于把可直接复用的登录凭据写进工件。现在只上传 `**/*.log`；需要排查配置问题时，请在本地用 `python ci/platform_guard.py --validate` 复现。

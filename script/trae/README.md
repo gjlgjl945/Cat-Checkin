@@ -55,8 +55,7 @@ python script/trae/import_accounts.py --list      # 先预览
 |------|------|
 | `main.py` | 签到主入口：多账号编排、判重、结果推送 |
 | `api.py` | 接口封装（网页会话 / 桌面令牌） |
-| `import_accounts.py` | 账号导入（官方客户端 / cockpit-tools） |
-| `web_checkin.py` | 单账号快速验证工具：`python web_checkin.py --session "<值>"` |
+| `import_accounts.py` | 账号导入（官方客户端 / cockpit-tools），仅本地使用 |
 
 ## 常见问题
 

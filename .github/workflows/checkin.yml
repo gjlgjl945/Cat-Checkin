@@ -75,6 +75,11 @@ jobs:
       - name: 校验配置结构
         run: python ci/platform_guard.py --validate
 
+      # 平台注册表与工作流静态矩阵必须一致：否则「加了平台却没进矩阵」会静默不执行。
+      # 这一步在起 4 个 job 之前就跑，漂移会在这里直接失败并给出修复命令。
+      - name: 校验平台矩阵一致性
+        run: python ci/platform_guard.py --check-matrix
+
       - name: 列出本次要运行的平台
         env:
           # 定时触发时没有 inputs 上下文，用 event_name 显式兜底，避免依赖隐式空值行为
@@ -97,10 +102,12 @@ jobs:
       # 在 job 内判定后跳过——位置放在装依赖之前，跳过的 job 只花十几秒。
       matrix:
         include:
+          # >>> PLATFORM_MATRIX（由 ci/platform_guard.py --sync-matrix 生成，勿手改）>>>
           - { key: kanxue, name: 看雪论坛, entry: script/kanxue/sign_in.py, timeout: 300 }
           - { key: wps, name: WPS Office, entry: script/wps/main.py, timeout: 1500 }
           - { key: smzdm, name: 什么值得买, entry: script/smzdm/sign_daily_task/main.py, timeout: 1500 }
           - { key: trae, name: Trae CN, entry: script/trae/main.py, timeout: 900 }
+          # <<< PLATFORM_MATRIX <<<
     steps:
       - name: 检出代码
         uses: actions/checkout@v7

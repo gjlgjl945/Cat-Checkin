@@ -49,7 +49,7 @@ import base64
 import hashlib
 import hmac
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from urllib.parse import quote_plus
 
 
@@ -317,7 +317,7 @@ class NotificationManager:
 
     def send(self, title: str, content: str, level: Optional[str] = None,
              sound: Optional[str] = None, group: Optional[str] = None,
-             url: Optional[str] = None, timeout: int = 10):
+             url: Optional[str] = None, timeout: int = 10) -> List[str]:
         """
         统一发送所有已启用的通知
 
@@ -329,33 +329,61 @@ class NotificationManager:
             group (Optional[str]): 推送分组 (Bark专用)
             url (Optional[str]): 跳转链接 (Bark专用)
             timeout (int): 请求超时时间
+
+        Returns:
+            List[str]: 实际发送成功的通道名；空列表表示没有任何通道可用或全部失败。
+            调用方据此判断「是否真的发出去了」，避免日志里出现「已发送」其实什么都没发。
         """
-        if self.is_bark_enabled():
-            self.send_bark_notification(title, content, timeout, level, sound, group, url)
-        if self.is_server_enabled():
-            self.send_server_notification(title, content, timeout)
-        if self.is_coolpush_enabled():
-            self.send_coolpush_notification(title, content, timeout)
-        if self.is_qmsg_enabled():
-            self.send_qmsg_notification(content, timeout)
-        if self.is_telegram_enabled():
-            self.send_telegram_notification(title, content, timeout)
-        if self.is_feishu_enabled():
-            self.send_feishu_notification(title, content, timeout)
-        if self.is_dingtalk_enabled():
-            self.send_dingtalk_notification(title, content, timeout)
-        if self.is_qywx_robot_enabled():
-            self.send_qywx_robot_notification(content, timeout)
-        if self.is_qywx_app_enabled():
-            self.send_qywx_app_notification(title, content, timeout)
-        if self.is_pushplus_enabled():
-            self.send_pushplus_notification(title, content, timeout)
-        if self.is_pushdeer_enabled():
-            self.send_pushdeer_notification(title, content, timeout)
-        if self.is_gotify_enabled():
-            self.send_gotify_notification(title, content, timeout)
-        if self.is_ntfy_enabled():
-            self.send_ntfy_notification(title, content, timeout)
+        # 测试 / dry-run 场景的显式开关：置 1 后不向任何外部服务发请求
+        if os.environ.get("NOTIFICATION_DISABLED"):
+            self.logger.info("已设置 NOTIFICATION_DISABLED，跳过全部推送通道")
+            return []
+
+        # 逐通道隔离：任何一个通道的配置/网络异常都不得阻断其它通道，
+        # 否则「Bark 配错」会导致后面的 Telegram、企微全部静默不发。
+        channels = (
+            ("Bark", self.is_bark_enabled,
+             lambda: self.send_bark_notification(title, content, timeout, level, sound, group, url)),
+            ("Server酱", self.is_server_enabled,
+             lambda: self.send_server_notification(title, content, timeout)),
+            ("CoolPush", self.is_coolpush_enabled,
+             lambda: self.send_coolpush_notification(title, content, timeout)),
+            ("Qmsg酱", self.is_qmsg_enabled,
+             lambda: self.send_qmsg_notification(content, timeout)),
+            ("Telegram", self.is_telegram_enabled,
+             lambda: self.send_telegram_notification(title, content, timeout)),
+            ("飞书", self.is_feishu_enabled,
+             lambda: self.send_feishu_notification(title, content, timeout)),
+            ("钉钉", self.is_dingtalk_enabled,
+             lambda: self.send_dingtalk_notification(title, content, timeout)),
+            ("企业微信机器人", self.is_qywx_robot_enabled,
+             lambda: self.send_qywx_robot_notification(content, timeout)),
+            ("企业微信应用", self.is_qywx_app_enabled,
+             lambda: self.send_qywx_app_notification(title, content, timeout)),
+            ("PushPlus", self.is_pushplus_enabled,
+             lambda: self.send_pushplus_notification(title, content, timeout)),
+            ("PushDeer", self.is_pushdeer_enabled,
+             lambda: self.send_pushdeer_notification(title, content, timeout)),
+            ("Gotify", self.is_gotify_enabled,
+             lambda: self.send_gotify_notification(title, content, timeout)),
+            ("Ntfy", self.is_ntfy_enabled,
+             lambda: self.send_ntfy_notification(title, content, timeout)),
+        )
+
+        delivered: List[str] = []
+        for name, enabled, deliver in channels:
+            try:
+                if not enabled():
+                    continue
+                if deliver() is False:
+                    self.logger.warning("⚠️ %s 推送未成功", name)
+                    continue
+                delivered.append(name)
+            except Exception as exc:  # 单通道异常不影响其它通道
+                self.logger.error("❌ %s 推送异常: %s", name, exc)
+        if not delivered:
+            self.logger.info("没有可用的推送通道（未配置或全部失败）")
+        return delivered
 
     def send_server_notification(self, title: str, content: str, timeout: int = 10) -> bool:
         """发送Server酱推送"""
@@ -831,7 +859,7 @@ def send_notification(title: str, content: str, level: Optional[str] = None,
         group (Optional[str]): 推送分组 (Bark专用)
         url (Optional[str]): 跳转链接 (Bark专用)
     """
-    notification_manager.send(title, content, level=level, sound=sound, group=group, url=url)
+    return notification_manager.send(title, content, level=level, sound=sound, group=group, url=url)
 
 
 if __name__ == "__main__":

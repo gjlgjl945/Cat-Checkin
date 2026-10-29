@@ -176,7 +176,6 @@ class TraeAPI:
                 'error': f'{message} (code={code})',
                 'error_type': error_type,
                 'code': code,
-                'body': body,
             }
 
         return {'success': True, 'data': body}
@@ -202,10 +201,8 @@ class TraeAPI:
             'checked_in': checked_in,
             'did_checked_in': bool(data.get('did_checked_in', False)),
             'credits': data.get('credits') or 0,
-            'extra_credits': data.get('extra_credits'),
             'enable': bool(data.get('enable', True)),
             'message': '今日已签到' if checked_in else '今日未签到',
-            'raw': data,
         }
 
     def get_checkin_status(self) -> Dict[str, Any]:

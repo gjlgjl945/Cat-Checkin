@@ -366,11 +366,10 @@ class WPSAPI:
         # RSA加密AES密钥 (这是请求头中的token)
         token = self.encryption.rsa_encrypt(aes_key, public_key_pem)
 
-        logger.debug(f"User ID: {user_id}")
-        logger.debug(f"Plain Data: {plain_data}")
-        logger.debug(f"AES Key: {aes_key}")
-        logger.debug(f"Extra: {encrypt_data}")
-        logger.debug(f"Token (请求头): {token}")
+        # 安全：token / AES 密钥属于可直接用于重放的凭据，任何日志级别都不输出原文，
+        # 只记录长度便于排查「空值」「长度异常」这类问题。
+        logger.debug("加密参数已生成: user_id=%s, token_len=%s, aes_key_len=%s",
+                     user_id, len(token or ''), len(aes_key or ''))
 
         return {
             "extra": encrypt_data,
@@ -420,8 +419,8 @@ class WPSAPI:
                 "pay_origin": "pc_ucs_rwzx_sign"
             }
 
-            logger.debug(f"请求URL: {self.sign_in_url}")
-            logger.debug(f"请求头Token: {crypto_result['token'][:50]}...")
+            logger.debug("请求URL: %s", self.sign_in_url)
+            logger.debug("请求头Token 长度: %s", len(crypto_result.get('token') or ''))
             logger.debug(f"请求数据: {json.dumps(data, indent=2)}")
 
             # 5. 发送请求

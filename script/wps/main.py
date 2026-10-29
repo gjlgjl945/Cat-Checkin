@@ -16,6 +16,7 @@ Author: Assistant
 Date: 2026-03-11
 """
 
+import argparse
 import logging
 import random
 import json
@@ -36,7 +37,6 @@ from logging_utils import (
     log_account_end,
     log_account_start,
     log_banner,
-    log_page_switch,
     log_startup,
 )
 from notification import send_notification, NotificationSound
@@ -73,7 +73,14 @@ class WPSMultiPageRunner:
             config_data = json.load(file)
 
         wps_config = config_data.get("wps", {})
-        accounts = wps_config.get("accounts", [])
+        raw_accounts = wps_config.get("accounts", [])
+        if not isinstance(raw_accounts, list):
+            raise ValueError("配置项 wps.accounts 必须是数组")
+        # 丢弃非对象条目，避免一条写错的配置让整轮任务崩在 .get() 上
+        skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
+        accounts = [item for item in raw_accounts if isinstance(item, dict)]
+        if skipped:
+            self.logger.warning("忽略 %s 条非对象格式的账号配置", skipped)
         if accounts:
             self.logger.info("成功加载 %s 个 WPS 账号", len(accounts))
         else:
@@ -90,14 +97,14 @@ class WPSMultiPageRunner:
         keywords = ("Token已过期", "ErrNotLogin", "userNotLogin", "未登录", "请重新登录")
         return any(keyword in message for keyword in keywords)
 
-    def run(self) -> None:
-        """按账号顺序执行所有页面任务。"""
+    def run(self) -> Dict[str, int]:
+        """按账号顺序执行所有页面任务，返回汇总计数供调用方决定退出码。"""
         log_startup(self.logger, len(self.accounts))
         self.logger.info("")
 
         if not self.accounts:
             self.logger.warning("没有需要处理的账号")
-            return
+            return self.stats()
 
         page_runners = [
             (
@@ -115,11 +122,9 @@ class WPSMultiPageRunner:
                 "pages": []
             }
 
-            account_logger = bind_logger(self.logger, account=account_name)
             log_account_start(self.logger, account_name)
 
             for page_index, (page_name, page_runner) in enumerate(page_runners):
-                page_logger = bind_logger(account_logger, step=page_name)
                 try:
                     page_result = page_runner.process_account(account_info)
                 except Exception as exc:
@@ -160,6 +165,13 @@ class WPSMultiPageRunner:
 
         self._print_summary()
         self._send_notification()
+        return self.stats()
+
+    def stats(self) -> Dict[str, int]:
+        """汇总账号级结果；failed 为「至少一个页面失败」的账号数。"""
+        total = len(self.account_results)
+        success = sum(1 for item in self.account_results if item["success"])
+        return {"total": total, "success": success, "failed": total - success}
 
     def _print_summary(self) -> None:
         """打印账号级页面汇总结果。"""
@@ -226,30 +238,52 @@ class WPSMultiPageRunner:
                 content_lines.append("")
 
         try:
-            send_notification(
+            delivered = send_notification(
                 title="WPS多页面任务结果通知",
                 content="\n".join(content_lines),
                 sound=NotificationSound.BIRDSONG
             )
-            self.logger.info("统一推送通知已发送")
+            if delivered:
+                self.logger.info("统一推送通知已发送: %s", ", ".join(delivered))
+            else:
+                self.logger.info("未配置可用的推送通道，跳过通知")
         except Exception as exc:
             self.logger.warning("发送统一推送通知失败: %s", exc)
 
 
-def main() -> None:
-    """主函数"""
+def main() -> int:
+    """主函数。退出码：0 全部成功，1 存在失败账号或运行异常。"""
+    parser = argparse.ArgumentParser(description="WPS 多页面任务")
+    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--allow-failures", action="store_true",
+                        help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")
+    args = parser.parse_args()
+
     try:
-        WPSMultiPageRunner().run()
+        stats = WPSMultiPageRunner(config_path=args.config).run()
     except FileNotFoundError as exc:
         print(f"❌ 错误: {exc}")
         print("请确保配置文件存在并包含 WPS 账号信息")
-        sys.exit(1)
+        return 1
+    except ValueError as exc:
+        # 配置结构错误（JSON 非法、accounts 不是数组）属于用户输入问题，不打印调用栈
+        print(f"❌ 配置错误: {exc}")
+        return 1
     except Exception as exc:
         print(f"❌ 发生未知错误: {exc}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
+
+    failed = stats.get("failed", 0)
+    if failed and not args.allow_failures:
+        print(f"❌ {failed} 个账号执行失败，退出码 1（可用 --allow-failures 关闭该行为）")
+        return 1
+    if stats.get("total", 0) == 0:
+        print("❌ 没有可执行的 WPS 账号")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

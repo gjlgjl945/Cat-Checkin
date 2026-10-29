@@ -69,6 +69,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _mask(value: Optional[str], keep: int = 4) -> str:
+    """把设备号/ID 之类的准凭据打码，只保留尾部若干位，便于排查又不泄露原值。"""
+    text = str(value or '')
+    if len(text) <= keep:
+        return '*' * len(text)
+    return '*' * (len(text) - keep) + text[-keep:]
+
+
 def _load_local_client_tools():
     """
     按需加载本机客户端辅助函数。
@@ -161,8 +169,15 @@ class TraeTasks:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
             trae_config = config_data.get('trae', {})
-            self.accounts = trae_config.get('accounts', [])
-            # 只保留 CN 账号（签到积分接口仅存在于 Trae CN）
+            raw_accounts = trae_config.get('accounts', [])
+            if not isinstance(raw_accounts, list):
+                raise ValueError("配置项 trae.accounts 必须是数组")
+            # 只保留 CN 账号（签到积分接口仅存在于 Trae CN）；非字典条目直接丢弃，
+            # 避免一条写错的配置让整轮任务在 .get() 上崩掉
+            skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
+            self.accounts = [item for item in raw_accounts if isinstance(item, dict)]
+            if skipped:
+                self.logger.warning(f"忽略 {skipped} 条非对象格式的账号配置")
             self.accounts = [a for a in self.accounts if a.get('region', 'CN') == 'CN']
 
             if not self.accounts:
@@ -391,13 +406,13 @@ class TraeTasks:
                 return result
 
             # 执行签到
-            self.logger.info(f"{account_name} - 执行签到 (device={device_id})")
+            self.logger.info(f"{account_name} - 执行签到 (device={_mask(device_id)})")
             checkin = api.claim_checkin()
 
             # 网页会话模式：9074（容量门/风控）与 9095（设备当日被占用）都能通过换新设备化解，
             # 但必须先等一个抖动区间——服务端按时间窗口排队，当场连发只会延长惩罚窗口。
             # 桌面令牌模式下的 9074 是真实设备错误，重试没有意义。
-            if (not checkin['success'] and checkin.get('code') in {9074, 9095}
+            if (not checkin['success'] and checkin.get('code') in DEVICE_CONFLICT_CODES
                     and mode == '网页会话'):
                 for attempt in range(WEB_DEVICE_RETRY):
                     if WEB_DEVICE_RETRY_BACKOFF > 0:
@@ -496,7 +511,7 @@ class TraeTasks:
                 self.shared_device = get_or_create_device_id(self.config_path.parent)
                 if self.shared_device:
                     scope = '单账号' if len(self.accounts) == 1 else '显式授权'
-                    self.logger.info(f"📱 {scope}场景回退本机主客户端设备: {self.shared_device}")
+                    self.logger.info(f"📱 {scope}场景回退本机主客户端设备: {_mask(self.shared_device)}")
 
         # 启动随机抖动，错开请求高峰
         if JITTER_MAX_SECONDS > 0:
@@ -605,12 +620,15 @@ class TraeTasks:
         content = "\n".join(content_lines)
 
         try:
-            send_notification(
+            delivered = send_notification(
                 title=title,
                 content=content,
                 sound=NotificationSound.BIRDSONG
             )
-            self.logger.info("✅ 推送通知已发送")
+            if delivered:
+                self.logger.info(f"✅ 推送通知已发送: {', '.join(delivered)}")
+            else:
+                self.logger.info("未配置可用的推送通道，跳过通知")
         except Exception as e:
             self.logger.warning(f"⚠️ 发送推送通知失败: {str(e)}")
 
@@ -637,6 +655,10 @@ def main() -> int:
         print(f"❌ 错误: {exc}")
         print("请确保配置文件存在并包含 trae 账号信息")
         return 1
+    except ValueError as exc:
+        # 配置结构错误（如 accounts 不是数组）属于用户输入问题，不需要打印调用栈
+        print(f"❌ 配置错误: {exc}")
+        return 1
     except Exception as exc:
         print(f"❌ 发生未知错误: {exc}")
         import traceback
@@ -644,6 +666,11 @@ def main() -> int:
         return 1
 
     failed = int(stats.get("failed", 0)) if stats else 0
+    total = int(stats.get("total", 0)) if stats else 0
+    if total == 0:
+        # 与其余三个平台保持一致：没有任何账号被执行 ≠ 成功
+        print("❌ 没有可执行的 Trae CN 账号")
+        return 1
     if failed and not args.allow_failures:
         print(f"❌ {failed} 个账号签到失败，退出码 1（可用 --allow-failures 关闭该行为）")
         return 1

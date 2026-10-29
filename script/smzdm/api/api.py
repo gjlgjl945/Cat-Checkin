@@ -13,11 +13,29 @@ import time
 from io import BytesIO
 from PIL import Image
 from urllib.parse import unquote
-from typing import Optional, Dict, Any
 from .sign_calculator import calculate_sign_from_params,calculate_sign
 
 # 获取logger实例（由main.py统一配置）
 logger = logging.getLogger(__name__)
+
+
+class _DefaultTimeoutSession(requests.Session):
+    """始终带超时的 Session。
+
+    本模块的请求全部是 `self.session.post(url, ...)` 形式且绝大多数没有显式 timeout，
+    在 CI 里一旦对端挂起，进程会一直占着 job 直到平台级超时才被杀掉（前面的账号结果
+    也一起丢掉）。requests 没有「会话级默认超时」开关，这里重写 request() 统一注入，
+    调用方显式传入的 timeout 仍然优先。
+
+    刻意不加自动重试：本站接口多为「领任务/领奖」这类非幂等写操作，重试可能重复执行。
+    """
+
+    DEFAULT_TIMEOUT = 20
+
+    def request(self, method, url, **kwargs):  # noqa: D401 - 与父类签名保持一致
+        if kwargs.get('timeout') is None:
+            kwargs['timeout'] = self.DEFAULT_TIMEOUT
+        return super().request(method, url, **kwargs)
 
 
 class SmzdmAPI:
@@ -42,7 +60,7 @@ class SmzdmAPI:
         """
         self.cookie = cookie
         self.user_agent = user_agent
-        self.session = requests.Session()
+        self.session = _DefaultTimeoutSession()
         self._setup_headers()
         self.setting = setting
         logger.debug("API客户端初始化完成")

@@ -16,6 +16,7 @@ Author: ZaiZaiCat
 Date: 2025-01-20
 """
 
+import argparse
 import json
 import logging
 import sys
@@ -70,7 +71,14 @@ class KanxueSignInManager:
             # 兼容嵌套结构
             if 'kanxue' in kanxue_config:
                 kanxue_config = kanxue_config.get('kanxue', {})
-            self.accounts = kanxue_config.get('accounts', [])
+            raw_accounts = kanxue_config.get('accounts', [])
+            if not isinstance(raw_accounts, list):
+                raise ValueError("配置项 kanxue.accounts 必须是数组")
+            # 丢弃非对象条目：一条格式写错的配置不应让整轮任务在 .get() 上崩掉
+            skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
+            self.accounts = [item for item in raw_accounts if isinstance(item, dict)]
+            if skipped:
+                logger.warning(f"忽略 {skipped} 条非对象格式的账号配置")
 
             if not self.accounts:
                 logger.warning("配置文件中没有找到看雪论坛账号信息")
@@ -236,12 +244,15 @@ class KanxueSignInManager:
             content = "\n".join(content_parts)
 
             # 发送通知
-            send_notification(
+            delivered = send_notification(
                 title=title,
                 content=content,
                 sound=sound
             )
-            logger.info(f"✅ {self.site_name}签到推送发送成功")
+            if delivered:
+                logger.info(f"✅ {self.site_name}签到推送发送成功: {', '.join(delivered)}")
+            else:
+                logger.info("未配置可用的推送通道，跳过通知")
 
         except Exception as e:
             logger.error(f"❌ {self.site_name}推送通知失败: {str(e)}", exc_info=True)
@@ -249,6 +260,12 @@ class KanxueSignInManager:
 
 def main():
     """主函数"""
+    parser = argparse.ArgumentParser(description="看雪论坛每日签到")
+    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--allow-failures", action="store_true",
+                        help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")
+    args = parser.parse_args()
+
     # 记录开始时间
     start_time = datetime.now()
     print(f"\n{'='*60}")
@@ -262,7 +279,7 @@ def main():
 
     try:
         # 创建签到管理器
-        manager = KanxueSignInManager()
+        manager = KanxueSignInManager(config_path=args.config)
 
         # 执行所有账号签到
         results = manager.sign_in_all_accounts()
@@ -297,9 +314,18 @@ def main():
         print(f"   ❌ 失败: {failed_count} 个账号")
         print(f"   📈 总计: {total_count} 个账号\n")
 
-        # 根据结果返回退出码
+        # 根据结果返回退出码：0 才代表「真的签到了」，其余一律非 0，
+        # 避免「账号全失败但 job 显示绿色」这种与事实不符的结论。
+        # 原实现部分失败返回 2，与包装脚本的「用法错误」语义冲突，此处统一为 1。
         if failed_count > 0:
-            return 1 if success_count == 0 else 2
+            if not args.allow_failures:
+                print(f"❌ {failed_count}/{total_count} 个账号签到失败，退出码 1"
+                      f"（可用 --allow-failures 关闭该行为）")
+                return 1
+            return 0
+        if total_count == 0:
+            print("❌ 没有可执行的账号（配置中的账号均不可用）")
+            return 1
         return 0
 
     except Exception as e:
