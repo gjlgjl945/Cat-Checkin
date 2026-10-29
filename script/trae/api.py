@@ -34,6 +34,10 @@ BASE_URL = 'https://api.trae.cn/trae/api/v2/ug'
 CHECKIN_STATUS_PATH = '/checkin_credits/status'
 CHECKIN_CLAIM_PATH = '/checkin_credits/claim'
 
+# 领取请求体。官方客户端会带 req_source=2；2026-10 多个同类实现实测：缺这个字段时
+# 领取更易被判 9074（服务端把它当作非客户端来源）。状态查询仍发空对象。
+CLAIM_BODY: Dict[str, Any] = {'req_source': 2}
+
 # 官方桌面客户端（TRAE SOLO CN）真实 UA，抓包确认；实测全链路可用
 DEFAULT_USER_AGENT = 'VSCode 1.107.1 (TRAE SOLO CN)'
 
@@ -113,9 +117,13 @@ class TraeAPI:
             headers['x-device-id'] = self.device_id
         return headers
 
-    def _post(self, path: str) -> Dict[str, Any]:
+    def _post(self, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         发送 POST 请求并解析统一响应结构
+
+        Args:
+            path: 相对 BASE_URL 的接口路径
+            payload: 请求体；None 表示空对象（状态查询用）
 
         Returns:
             Dict[str, Any]: 包含 success/data/error/error_type/code 的结果字典
@@ -124,7 +132,7 @@ class TraeAPI:
         headers = self._build_headers()
 
         try:
-            response = _get_session().post(url, headers=headers, json={}, timeout=self.timeout)
+            response = _get_session().post(url, headers=headers, json=payload or {}, timeout=self.timeout)
         except requests.RequestException as e:
             return {'success': False, 'error': f'请求 {path} 失败: {e}', 'error_type': 'network'}
 
@@ -224,7 +232,7 @@ class TraeAPI:
         Returns:
             Dict[str, Any]: 包含 message/credits（本次奖励）的结果字典
         """
-        result = self._post(CHECKIN_CLAIM_PATH)
+        result = self._post(CHECKIN_CLAIM_PATH, CLAIM_BODY)
         if not result['success']:
             return {
                 'success': False,
@@ -375,6 +383,18 @@ class TraeWebAPI:
                 return result
             self._jwt = None  # 强制下次换新后重试
         return {'success': False, 'error': '网页令牌异常', 'error_type': 'token_expired'}
+
+    def with_device(self, device_id: str) -> 'TraeWebAPI':
+        """
+        复制当前会话并换用新设备。
+
+        9074/9095 重试时使用：复用已换取的 JWT，避免每次重试都重新走一次
+        GetUserToken（既省一次请求，也少一次被风控计入的换票动作）。
+        """
+        clone = TraeWebAPI(session=self.session, device_id=device_id, timeout=self.timeout)
+        clone._jwt = self._jwt
+        clone.user_id = self.user_id
+        return clone
 
     def get_checkin_status(self) -> Dict[str, Any]:
         """查询今日签到状态"""

@@ -19,7 +19,7 @@ Trae CN 已切换为积分计费，本脚本每天自动为配置中的每个账
   设备时，只有该设备所属账号能领取成功，其它账号会被服务端以 code=9095（设备当日已被占用）
   或 code=9074（设备未登记/冲突，文案常为「当前参与用户太多」）拒绝。
 - 网页会话模式（session，推荐多账号）：用 X-Cloudide-Session 换取 JWT 后，随机 16 位设备
-  即可签到（实测 code=0）。9074 为偶发风控，脚本会自动换随机设备重试 5 次。
+  即可签到（实测 code=0）。9074/9095 会等待抖动区间后换随机设备重试 2 次（可配置）。
 - 长效登录 Cookie（sessionid，推荐）：配置后每次运行先调 /cloudide/api/v3/trae/Login
   自动刷新 X-Cloudide-Session（与浏览器打开 trae.cn 的续期链路一致）。实测只需
   `sessionid` 一个 Cookie 即可刷新，约 60 天不失效；配了它就不再需要手工更新 session。
@@ -29,7 +29,7 @@ Trae CN 已切换为积分计费，本脚本每天自动为配置中的每个账
 - 账号级签到设备 ID：优先取账号自身配置/官方客户端配对设备
 - 网页会话（session）失效时自动回退该账号 access_token 再试一次
 - 令牌本地过期预检（expires_at），HTTP 连接/5xx 自动重试（会话复用）
-- 网页会话 9074 偶发风控自动换设备重试；领取失败自动复查状态，如实上报
+- 网页会话 9074/9095 自动换设备重试（带退避）；领取失败自动复查状态，如实上报
 - 长效 Cookie 自动刷新 session，隔天/隔周签到不因 session 过期失效
 - 重复账号识别：不同 sessionid 指向同一账号（UserID 相同）时报「重复」而非误报「今日已签到」
 - 通知显示名 = 配置 account_name + UserID 尾号（服务端无昵称接口，以配置名为主、尾号兜底）
@@ -94,8 +94,11 @@ JITTER_MAX_SECONDS = _env_int('TRAE_JITTER_MAX', 0 if IS_CI else 600)
 
 # 领取接口设备类错误码：9074 设备未登记/冲突；9095 设备当日已用于其它账号签到
 DEVICE_CONFLICT_CODES = {9074, 9095}
-# 网页会话模式 9074 偶发风控的换随机设备重试次数
-WEB_9074_RETRY = 5
+# 网页会话模式 9074/9095 的处置参数：
+# 9074 多为服务端容量门限流（连发会延长惩罚窗口），9095 为设备当日已被占用，两者都可换新设备重试，
+# 但默认先等待一个抖动区间。可用 TRAE_9074_RETRY / TRAE_9074_BACKOFF（秒）调整，BACKOFF=0 关闭等待。
+WEB_DEVICE_RETRY = _env_int('TRAE_9074_RETRY', 2)
+WEB_DEVICE_RETRY_BACKOFF = _env_int('TRAE_9074_BACKOFF', 20)
 # 9074：设备未登记或伪造（文案「当前参与用户太多」）；9095：共享设备今日已被其它账号占用
 DEVICE_MISSING_HINT = (
     "签到被设备校验拒绝（code={code}: {message}）。Trae CN 领取积分必须使用该账号"
@@ -391,18 +394,24 @@ class TraeTasks:
             self.logger.info(f"{account_name} - 执行签到 (device={device_id})")
             checkin = api.claim_checkin()
 
-            # 网页会话模式：9074 为偶发风控（实测随机设备可签到，见 web_checkin.py 验证），
-            # 换全新随机设备重试 WEB_9074_RETRY 次；桌面令牌模式 9074 是真实设备错误，不重试
-            if (not checkin['success'] and checkin.get('code') == 9074
+            # 网页会话模式：9074（容量门/风控）与 9095（设备当日被占用）都能通过换新设备化解，
+            # 但必须先等一个抖动区间——服务端按时间窗口排队，当场连发只会延长惩罚窗口。
+            # 桌面令牌模式下的 9074 是真实设备错误，重试没有意义。
+            if (not checkin['success'] and checkin.get('code') in {9074, 9095}
                     and mode == '网页会话'):
-                for attempt in range(WEB_9074_RETRY):
+                for attempt in range(WEB_DEVICE_RETRY):
+                    if WEB_DEVICE_RETRY_BACKOFF > 0:
+                        wait = random.uniform(WEB_DEVICE_RETRY_BACKOFF * 0.75,
+                                              WEB_DEVICE_RETRY_BACKOFF * 1.25)
+                        self.logger.info(
+                            f"⏳ {account_name} 等待 {wait:.0f}s 后再试（给服务端限流窗口让路）")
+                        time.sleep(wait)
                     retry_device = str(random.randint(10 ** 15, 10 ** 16 - 1))
                     self.logger.info(
-                        f"🔄 {account_name} 9074 偶发风控，换随机设备重试 "
-                        f"({attempt + 1}/{WEB_9074_RETRY})")
-                    retry_api = TraeWebAPI(
-                        session=str(account_info.get('session') or ''),
-                        device_id=retry_device)
+                        f"🔄 {account_name} code={checkin.get('code')}，换随机设备重试 "
+                        f"({attempt + 1}/{WEB_DEVICE_RETRY})")
+                    # 复用已换取的 JWT，避免每次重试都多打一次 GetUserToken
+                    retry_api = api.with_device(retry_device)
                     checkin = retry_api.claim_checkin()
                     if checkin['success']:
                         break
