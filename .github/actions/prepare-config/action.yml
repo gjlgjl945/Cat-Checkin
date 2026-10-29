@@ -1,13 +1,32 @@
 name: 还原运行配置
 description: >-
-  从 Secrets 还原 config/token.json 与 config/notification.json。
+  从 Secrets 还原各平台的独立配置 config/token.<key>.json 与 config/notification.json。
+  每个平台一个 Secret（TOKEN_KANXUE_JSON / TOKEN_WPS_JSON / TOKEN_SMZDM_JSON /
+  TOKEN_TRAE_JSON），也可以只用一个 TOKEN_JSON 传旧格式，动作会自动按平台拆开。
   Secret 内容支持 base64 编码或直接粘贴 JSON 原文，二者自动识别。
-  仅落盘与校验，不回显任何凭据内容。
+  仅落盘与校验，不回显任何凭据内容；单个平台内容有问题不会阻断其它平台。
 
 inputs:
+  token_kanxue_json:
+    description: 看雪论坛配置（base64 或 JSON 原文），留空则跳过
+    required: false
+    default: ""
+  token_wps_json:
+    description: WPS Office 配置（base64 或 JSON 原文），留空则跳过
+    required: false
+    default: ""
+  token_smzdm_json:
+    description: 什么值得买配置（base64 或 JSON 原文），留空则跳过
+    required: false
+    default: ""
+  token_trae_json:
+    description: Trae CN 配置（base64 或 JSON 原文），留空则跳过
+    required: false
+    default: ""
   token_json:
-    description: token.json 内容（base64 或 JSON 原文）
-    required: true
+    description: 兼容旧用法：一份包含多个平台节点的 JSON，动作会按平台拆分
+    required: false
+    default: ""
   notification_json:
     description: notification.json 内容（base64 或 JSON 原文），留空则跳过
     required: false
@@ -16,11 +35,15 @@ inputs:
 runs:
   using: composite
   steps:
-    # 用 Python 而不是 shell 做解码：base64 校验、JSON 解析、权限设置都在一处，
-    # 也避免 YAML 块缩进把 heredoc 终止符推离行首导致语法错误。
-    - name: 写入并校验 config/token.json
+    # 用 Python 而不是 shell 做解码：base64 校验、JSON 解析、按平台拆分、权限设置
+    # 都在一处，也避免 YAML 块缩进把 heredoc 终止符推离行首导致语法错误。
+    - name: 写入各平台独立配置
       shell: bash
       env:
+        TOKEN_KANXUE_JSON: ${{ inputs.token_kanxue_json }}
+        TOKEN_WPS_JSON: ${{ inputs.token_wps_json }}
+        TOKEN_SMZDM_JSON: ${{ inputs.token_smzdm_json }}
+        TOKEN_TRAE_JSON: ${{ inputs.token_trae_json }}
         TOKEN_JSON: ${{ inputs.token_json }}
       run: |
         python - <<'PY'
@@ -28,41 +51,104 @@ runs:
         import json
         import os
         import sys
+        from pathlib import Path
 
-        raw = os.environ.get("TOKEN_JSON", "").strip()
-        if not raw:
-            print("::error::缺少 Secret: TOKEN_JSON。请在 Settings → Secrets and variables → Actions 中添加。")
-            sys.exit(1)
+        # 平台清单以 ci/platform_guard.py 的注册表为准，这里只做目录与文件名的约定
+        KEYS = ["kanxue", "wps", "smzdm", "trae"]
+        CONFIG_DIR = Path("config")
 
-        if raw.startswith("{"):
-            text = raw
-        else:
+        def decode(raw: str, label: str):
+            """base64 或 JSON 原文，返回解析后的对象；失败抛 ValueError（带可读原因）。"""
+            text = raw.strip()
+            if not text.startswith("{"):
+                try:
+                    text = base64.b64decode("".join(text.split()), validate=True).decode("utf-8")
+                except Exception as exc:
+                    raise ValueError(f"{label} 既不是 JSON 原文，也无法按 base64 解码: {exc}")
             try:
-                text = base64.b64decode("".join(raw.split()), validate=True).decode("utf-8")
+                return json.loads(text)
             except Exception as exc:
-                print(f"::error::TOKEN_JSON 既不是 JSON 原文，也无法按 base64 解码: {exc}")
-                sys.exit(1)
+                raise ValueError(f"{label} 解析失败: {exc}")
 
-        try:
-            data = json.loads(text)
-        except Exception as exc:
-            print(f"::error::config/token.json 解析失败: {exc}")
+        def write_platform(key: str, node: dict) -> None:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            path = CONFIG_DIR / f"token.{key}.json"
+            payload = json.dumps({key: node}, ensure_ascii=False, indent=2) + "\n"
+            # 显式 newline="\n"：Windows 上文本模式会把 \n 翻成 \r\n
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(payload)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+
+        # 旧格式：一份里含多个平台节点，拆成多份
+        legacy_data = None
+        legacy_raw = os.environ.get("TOKEN_JSON", "").strip()
+        if legacy_raw:
+            try:
+                legacy_data = decode(legacy_raw, "TOKEN_JSON")
+                if not isinstance(legacy_data, dict):
+                    raise ValueError("TOKEN_JSON 顶层必须是 JSON 对象")
+            except ValueError as exc:
+                print(f"::error::{exc}")
+                legacy_data = None
+
+        written, failed, legacy_used = [], [], []
+
+        for key in KEYS:
+            raw = os.environ.get(f"TOKEN_{key.upper()}_JSON", "").strip()
+            node = None
+            source = ""
+            try:
+                if raw:
+                    data = decode(raw, f"TOKEN_{key.upper()}_JSON")
+                    if not isinstance(data, dict):
+                        raise ValueError(f"TOKEN_{key.upper()}_JSON 顶层必须是 JSON 对象")
+                    # 允许 {"accounts": [...]} 与 {"<key>": {...}} 两种写法
+                    if key in data:
+                        node = data[key]
+                    elif "accounts" in data:
+                        node = data
+                    else:
+                        raise ValueError(
+                            f"TOKEN_{key.upper()}_JSON 里既没有 accounts，也没有 {key} 节点")
+                    source = "独立 Secret"
+                elif legacy_data is not None and key in legacy_data:
+                    node = legacy_data[key]
+                    source = "TOKEN_JSON 拆分"
+                    legacy_used.append(key)
+            except ValueError as exc:
+                # 单个平台配置有问题只影响它自己，不阻断其它平台
+                print(f"::error::{key} {exc}")
+                failed.append(key)
+                continue
+
+            if node is None:
+                continue
+            if not isinstance(node, dict):
+                print(f"::error::{key} 的配置节点必须是 JSON 对象")
+                failed.append(key)
+                continue
+            write_platform(key, node)
+            written.append(f"{key}({source})")
+
+        if written:
+            print("已写入平台配置：" + "、".join(written))
+        elif not failed:
+            print("::notice::未提供任何平台配置（既没有 TOKEN_<平台>_JSON，也没有 TOKEN_JSON）")
+        if legacy_used:
+            print("::notice::以下平台仍从旧 TOKEN_JSON 拆分，建议改为各自的 Secret："
+                  + "、".join(legacy_used))
+        if failed:
+            print("::warning::以下平台配置有误，本次将被跳过或失败：" + "、".join(failed))
+
+        # 一个平台都没写出来，且用户确实给了内容 → 说明配置全坏了，尽早失败
+        provided = bool(legacy_raw) or any(
+            os.environ.get(f"TOKEN_{k.upper()}_JSON", "").strip() for k in KEYS)
+        if provided and not written:
+            print("::error::提供的配置一份都没能写入，请检查 Secret 内容")
             sys.exit(1)
-        if not isinstance(data, dict):
-            print("::error::config/token.json 顶层必须是 JSON 对象")
-            sys.exit(1)
-
-        os.makedirs("config", exist_ok=True)
-        path = os.path.join("config", "token.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-
-        keys = sorted(key for key, value in data.items() if isinstance(value, dict))
-        print(f"已生成 {path}，顶层节点 {len(keys)} 个：{', '.join(keys)}")
         PY
 
     - name: 写入并校验 config/notification.json
@@ -84,27 +170,34 @@ runs:
                 try:
                     text = base64.b64decode("".join(raw.split()), validate=True).decode("utf-8")
                 except Exception as exc:
-                    print(f"::error::NOTIFICATION_JSON 既不是 JSON 原文，也无法按 base64 解码: {exc}")
-                    sys.exit(1)
+                    # 通知配错不该阻断签到：报错并跳过，脚本自己会说明「没有可用通道」
+                    print(f"::error::NOTIFICATION_JSON 无法解码，已跳过通知配置: {exc}")
+                    text = ""
 
-            try:
-                data = json.loads(text)
-            except Exception as exc:
-                print(f"::error::config/notification.json 解析失败: {exc}")
-                sys.exit(1)
-            if not isinstance(data, dict):
-                print("::error::config/notification.json 顶层必须是 JSON 对象")
-                sys.exit(1)
+            data = {}
+            if text:
+                try:
+                    data = json.loads(text)
+                except Exception as exc:
+                    print(f"::error::config/notification.json 解析失败，已跳过通知配置: {exc}")
+                    data = {}
+            if text and not isinstance(data, dict):
+                print("::error::config/notification.json 顶层必须是 JSON 对象，已跳过通知配置")
+                data = {}
 
-            os.makedirs("config", exist_ok=True)
-            path = os.path.join("config", "notification.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(text)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
-            print(f"已生成 {path}，推送通道 {len(data)} 个：{', '.join(sorted(data))}")
+            if data:
+                os.makedirs("config", exist_ok=True)
+                path = os.path.join("config", "notification.json")
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+                print(f"已生成 {path}，推送通道 {len(data)} 个：{', '.join(sorted(data))}")
+            else:
+                # 通知配错不影响签到，只是这次不发推送
+                print("::notice::通知配置未生效，本次不发送推送（不妨碍签到）")
         else:
             print("::notice::未提供 NOTIFICATION_JSON，改用环境变量或直接跳过推送")
 

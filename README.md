@@ -23,25 +23,53 @@
 ### 1. Fork 仓库
 点击右上角 **Fork**，把仓库 fork 到自己的 GitHub 账户下。
 
-### 2. 准备 `config/token.json`
+### 2. 准备配置（一个平台一份文件）
 
-唯一权威模板是 [`config/template_token.json`](config/template_token.json)，四个平台的字段都列在里面。
-复制一份另存为 `config/token.json`，只保留你要跑的账号（未配置的平台会被工作流自动跳过）。
+**每个平台一个文件，互不影响。** 文件名固定由平台 key 推导：
 
-先在本地做一次结构自检，比在 CI 上试错快得多：
+| 平台 | 文件名 | Secret |
+|---|---|---|
+| 看雪论坛 | `config/token.kanxue.json` | `TOKEN_KANXUE_JSON` |
+| WPS Office | `config/token.wps.json` | `TOKEN_WPS_JSON` |
+| 什么值得买 | `config/token.smzdm.json` | `TOKEN_SMZDM_JSON` |
+| Trae CN | `config/token.trae.json` | `TOKEN_TRAE_JSON` |
 
-```bash
-python ci/platform_guard.py --config config/token.json --validate
+文件内容就是旧 `token.json` 里对应的那一个顶层节点，字段与结构完全不变。例如 `config/token.wps.json`：
+
+```json
+{ "wps": { "accounts": [ { "account_name": "主号", "user_id": 123, "cookies": "..." } ] } }
 ```
 
-输出会列出每个平台的账号数与「已配置 / 未配置」，并且不会打印任何凭据内容。
+文件名本身已表明平台，因此也接受省略外层节点的写法：`{ "accounts": [ ... ] }`，两种都行。
 
-然后编码为 Secret（也支持直接粘贴 JSON 原文，工作流会自动识别）：
+字段全量参考见 [`config/template_token.json`](config/template_token.json)（它只是文档，不参与运行）。
 
-- macOS / Linux：`base64 -w0 config/token.json`
+**从旧的单文件迁移**（`config/token.json` 里四个平台都在一份里）：
+
+```bash
+python ci/migrate_config.py            # 先预览：会生成哪几份、各有多少账号
+python ci/migrate_config.py --apply    # 实际拆分
+# 确认新文件可用后，可加 --remove-legacy 顺带删掉旧文件
+```
+
+迁移是**保结构的整节点搬运**：`token.json` 的 `wps` 节点原样搬进 `token.wps.json`，字段一个不改。
+旧的 `token.json` 会保留，但**只要对应平台文件存在就不会再读它**；如果某个平台没有独立文件，
+才会回退到旧文件并在日志里提示。
+
+拆分完做一次结构自检（比在 CI 上试错快得多）：
+
+```bash
+python ci/platform_guard.py --validate
+```
+
+输出会列出每个平台的文件、账号数与「已配置 / 未配置 / 结构错误」，不打印任何凭据内容。
+
+然后按平台编码为 Secret（也支持直接粘贴 JSON 原文，工作流会自动识别）：
+
+- macOS / Linux：`base64 -w0 config/token.wps.json`
 - Windows PowerShell：
   ```powershell
-  [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("config/token.json"))
+  [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("config/token.wps.json"))
   ```
 
 各平台字段的获取方法见下方 [🔑 账号信息获取教程](#-账号信息获取教程)。
@@ -51,8 +79,17 @@ python ci/platform_guard.py --config config/token.json --validate
 
 | Secret 名称 | 必填 | 内容 |
 |---|---|---|
-| `TOKEN_JSON` | 是 | `config/token.json` 的 base64 编码，或直接粘贴 JSON 原文 |
+| `TOKEN_KANXUE_JSON` | 按需 | `config/token.kanxue.json` 的 base64 或 JSON 原文 |
+| `TOKEN_WPS_JSON` | 按需 | `config/token.wps.json` 的 base64 或 JSON 原文 |
+| `TOKEN_SMZDM_JSON` | 按需 | `config/token.smzdm.json` 的 base64 或 JSON 原文 |
+| `TOKEN_TRAE_JSON` | 按需 | `config/token.trae.json` 的 base64 或 JSON 原文 |
+| `TOKEN_JSON` | 兼容 | 旧用法：一份含多平台的 JSON，动作会自动按平台拆开 |
 | `NOTIFICATION_JSON` | 否 | `config/notification.json` 的 base64 或 JSON 原文；不推送可跳过 |
+
+至少要配一个平台，否则工作流会在校验阶段报「没有任何平台配置了有效账号」。
+
+**某个平台的账号过期时，只替换它自己的那个 Secret 即可**，其它平台完全不受影响；
+同名平台如果同时存在独立 Secret 和 `TOKEN_JSON`，以独立 Secret 为准。
 
 推送也可改用环境变量注入（与 `NOTIFICATION_JSON` 二选一，工作流已把常用通道映射进来）：
 `BARK_PUSH`、`BARK_ICON`、`BARK_SOUND`、`BARK_GROUP`、`BARK_LEVEL`、`BARK_URL`、`SCKEY`、`SENDKEY`、
@@ -72,10 +109,12 @@ python ci/platform_guard.py --config config/token.json --validate
 
 ### 5. 执行模型与可调参数
 
-- `prepare` 任务先校验 `config/token.json`，配置不合法立即失败，避免四个平台 job 一起报错
+- `prepare` 任务逐个平台校验各自的配置文件：**没有任何平台可用**时才整体失败；
+  单个平台的文件损坏只会在日志里点名，不影响其它平台——那一个 job 变红，其余照跑
 - `prepare` 还会做一次**矩阵一致性校验**（`--check-matrix`）：平台注册表与 workflow 静态矩阵必须逐行相同，
   否则「加了平台却忘记加矩阵」会静默不执行。漂移时按提示跑 `python ci/platform_guard.py --sync-matrix` 修复
-- `checkin` 使用**静态矩阵**（平台清单写在 workflow 里）。每个 job 在装依赖之前先跑 `ci/platform_guard.py` 自查：账号数为 0、或不在 `platforms` 输入范围内的平台直接跳过，不会让工作流变红
+- `checkin` 使用**静态矩阵**（平台清单写在 workflow 里）。每个 job 在装依赖之前先跑 `ci/platform_guard.py` 自查：
+  只看**自己那份**配置文件——文件缺失或账号数为 0 就跳过，文件存在但内容不对就报错（该 job 变红，其它平台不受影响）
 - 之所以不用动态矩阵：`prepare` 加载了 `TOKEN_JSON`，GitHub 会在作业结束时丢弃「疑似包含 Secret」的作业输出，下游 `fromJSON` 只能拿到空串并报 `empty input`；静态矩阵彻底绕开这个耦合
 - **退出码即事实**：四个平台脚本在「存在失败账号」时返回 1（job 变红），全部成功或今日已签才返回 0；
   本地调试若不想让失败显红，加 `--allow-failures`
@@ -315,7 +354,7 @@ python script/trae/main.py --allow-failures  # 有账号失败时仍返回 0（�
 
 - `cookie` / `sessionid` / `setting` 等字段等同于你的登录凭证，**不要截图发到群里、不要提交到公开仓库**
 - 本项目只通过 GitHub Secrets 注入这些信息，Secrets 对他人不可见
-- `config/token.json` 已被 `.gitignore` 排除；模板文件 `config/template_token.json` 是公开的，只放占位文字
+- `config/token.<平台>.json` 与旧的 `config/token.json` 都已被 `.gitignore` 排除；模板文件 `config/template_token.json` 是公开的，只放占位文字
 - 各平台 Cookie 都有有效期（几天到几个月不等），失效后脚本会报登录态错误，重新按上面步骤取一次并更新 Secret 即可
 
 ## 🔧 本地运行（可选）
@@ -326,10 +365,13 @@ python script/trae/main.py --allow-failures  # 有账号失败时仍返回 0（�
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 准备配置（唯一模板是 config/template_token.json）
-cp config/template_token.json config/token.json
-# 用编辑器填好真实账号信息，并做一次结构自检
-python ci/platform_guard.py --config config/token.json --validate
+# 2. 准备配置：一个平台一份文件（字段参考 config/template_token.json 对应节点）
+#    例如只要跑看雪，就只写 config/token.kanxue.json：
+#    { "kanxue": { "accounts": [ { "account_name": "...", "cookie": "...", "csrf_token": "..." } ] } }
+#    如果手上还是旧的单文件 config/token.json，先拆分：
+python ci/migrate_config.py --apply
+# 然后做一次结构自检
+python ci/platform_guard.py --validate
 
 # 3. 运行（任选平台；脚本默认按仓库根目录定位配置，可在任意 cwd 下执行）
 python script/kanxue/sign_in.py
@@ -348,7 +390,7 @@ ENTRY_TIMEOUT_SECONDS=300 RETRY_MAX=1 bash ci/run_entry.sh script/kanxue/sign_in
 
 | 参数 | 作用 |
 |---|---|
-| `--config PATH` | 指定配置文件，默认 `config/token.json` |
+| `--config PATH` | 指定配置文件；默认读本平台自己的 `config/token.<key>.json` |
 | `--allow-failures` | 有失败账号时仍返回 0（默认返回 1，便于 CI 报红） |
 | `--dry-run` | 只查状态不领取（仅 Trae 支持；其余平台接口无独立的状态查询） |
 
@@ -361,16 +403,22 @@ Cat-Checkin/
 │   └── actions/prepare-config/      # 复用动作：从 Secrets 还原并校验配置
 ├── ci/
 │   ├── platform_guard.py            # 平台守卫：配置校验 / 平台筛选 / 矩阵一致性校验
+│   ├── migrate_config.py            # 把旧的单文件配置拆成按平台独立的文件
 │   └── run_entry.sh                 # 统一入口包装：超时、重试、退出码
 ├── config/
 │   ├── template_notification.json   # 推送配置模板（含全部字段说明）
-│   ├── template_token.json          # 账号配置模板（四个平台）
-│   └── token.json                   # ⚠️ 真实配置，已被 .gitignore 排除
+│   ├── template_token.json          # 账号字段模板（四个平台，仅作参考）
+│   ├── token.kanxue.json            # ⚠️ 看雪账号，已被 .gitignore 排除
+│   ├── token.wps.json               # ⚠️ WPS 账号
+│   ├── token.smzdm.json             # ⚠️ 什么值得买账号
+│   ├── token.trae.json              # ⚠️ Trae 账号
+│   └── token.json                   # 旧的单文件配置（拆分后不再读取）
 ├── script/
 │   ├── kanxue/                      # 看雪论坛
 │   ├── wps/                         # WPS Office（任务中心 + 天天领福利）
 │   ├── smzdm/                       # 什么值得买
 │   └── trae/                        # Trae CN（含本机账号导入工具）
+├── platform_config.py               # 配置定位与解包：文件名规则 / 旧文件回退 / 结构校验
 ├── notification.py                  # 推送模块（文件 > 环境变量 > 默认值）
 ├── requirements.txt
 └── README.md
@@ -395,6 +443,19 @@ A：不会。矩阵是固定清单，但每个 job 先跑 `ci/platform_guard.py`
 
 **Q：某个平台 job 显示 124 / 超时怎么办？**
 A：124 来自 `timeout` 命令，表示该平台超过矩阵里的 `timeout` 秒。调大对应平台超时，或排查脚本是否卡在网络重试。
+
+**Q：某个平台的账号过期了，只想换这一个平台怎么办？**
+A：只替换它自己的文件（本地 `config/token.<key>.json`）或 Secret（`TOKEN_<KEY>_JSON`）即可，
+其它平台的文件与 Secret 完全不用动，下一次运行也只会用新的那份。
+
+**Q：拆成四份之后，某个平台的文件删了会不会影响别人？**
+A：不会。每个脚本只读自己那份，缺失就是「这个平台未配置」，对应 job 跳过，其余照常跑。
+唯一的例外：如果旧的 `config/token.json` 还在，被删掉的那个平台会**回退到旧文件**（日志和校验表都会标
+「旧 token.json」）。确实想停用某平台，请连旧文件一起删掉，或干脆不配它的 Secret。
+
+**Q：平台文件写错了（比如把看雪的配置复制成 wps）会怎样？**
+A：校验阶段会报「配置里没有 wps 节点（现有节点：kanxue）」，并且**只有这个平台的 job 失败**，
+其它平台照常签到。这正是拆分的意义：错误被限制在一份文件里。
 
 **Q：某个账号失败会不会把整个 job 弄红？**
 A：会，而且这是刻意的。四个平台脚本都以「是否存在失败账号」决定退出码：全部成功或今日已签返回 0，任一账号失败返回 1。

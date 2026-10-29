@@ -69,6 +69,12 @@ jobs:
       - name: 还原运行配置
         uses: ./.github/actions/prepare-config
         with:
+          # 每个平台一个 Secret：只改某个平台的账号时，只替换它自己的那份即可。
+          # TOKEN_JSON 是旧用法（一份含多平台），动作会按平台自动拆开；同名平台以独立 Secret 优先。
+          token_kanxue_json: ${{ secrets.TOKEN_KANXUE_JSON }}
+          token_wps_json: ${{ secrets.TOKEN_WPS_JSON }}
+          token_smzdm_json: ${{ secrets.TOKEN_SMZDM_JSON }}
+          token_trae_json: ${{ secrets.TOKEN_TRAE_JSON }}
           token_json: ${{ secrets.TOKEN_JSON }}
           notification_json: ${{ secrets.NOTIFICATION_JSON }}
 
@@ -127,6 +133,12 @@ jobs:
       - name: 还原运行配置
         uses: ./.github/actions/prepare-config
         with:
+          # 每个平台一个 Secret：只改某个平台的账号时，只替换它自己的那份即可。
+          # TOKEN_JSON 是旧用法（一份含多平台），动作会按平台自动拆开；同名平台以独立 Secret 优先。
+          token_kanxue_json: ${{ secrets.TOKEN_KANXUE_JSON }}
+          token_wps_json: ${{ secrets.TOKEN_WPS_JSON }}
+          token_smzdm_json: ${{ secrets.TOKEN_SMZDM_JSON }}
+          token_trae_json: ${{ secrets.TOKEN_TRAE_JSON }}
           token_json: ${{ secrets.TOKEN_JSON }}
           notification_json: ${{ secrets.NOTIFICATION_JSON }}
 

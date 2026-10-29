@@ -41,6 +41,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from notification import send_notification, NotificationSound
+from platform_config import normalize_node, resolve_path
 
 
 class WPSTaskCenterPage:
@@ -49,10 +50,8 @@ class WPSTaskCenterPage:
     page_name = "任务中心"
 
     def __init__(self, config_path: str = None, enable_notification: bool = True, load_accounts: bool = True):
-        if config_path is None:
-            self.config_path = project_root / "config" / "token.json"
-        else:
-            self.config_path = Path(config_path)
+        # 与主入口一致：默认只读本平台的 config/token.wps.json
+        self.config_path, _ = resolve_path("wps", config_path, project_root)
 
         self.enable_notification = enable_notification
         self.accounts: List[Dict[str, Any]] = []
@@ -81,8 +80,8 @@ class WPSTaskCenterPage:
             self.logger.error("读取配置文件失败: %s", exc)
             raise
 
-        wps_config = config_data.get("wps", {})
-        self.accounts = wps_config.get("accounts", [])
+        wps_config = normalize_node(config_data, "wps")
+        self.accounts = [a for a in wps_config.get("accounts", []) if isinstance(a, dict)]
 
         if self.accounts:
             self.logger.info("成功加载 %s 个账号配置", len(self.accounts))

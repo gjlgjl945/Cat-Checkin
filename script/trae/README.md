@@ -12,7 +12,7 @@ pip install requests pycryptodome
 
 2. **获取账号会话**：浏览器登录 https://www.trae.cn → F12 → 应用(Application) → Cookies → 复制 `sessionid` 的值（约 60 天有效）。**只需这一个 cookie**，`sid_tt`/`uid_tt`/`passport_*`/`X-Cloudide-Session` 等均不需要。
 
-3. **写入配置**：在 `config/token.json` 的 `trae` 节点添加账号（`token.json` 已在 .gitignore，不会提交）：
+3. **写入配置**：本平台只读 `config/token.trae.json`（已在 .gitignore，不会提交）；旧的 `config/token.json` 里写 `trae` 节点仍兼容，但会提示迁移。账号写在 `trae` 节点下：
 
 ```json
 {

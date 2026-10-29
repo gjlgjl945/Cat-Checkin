@@ -208,6 +208,8 @@ __marimo__/
 
 # Local secret config files
 config/token.json
+# 按平台拆分的配置（真实凭据，绝不入库）
+config/token.*.json
 config/notification.json
 config/*.secret.json
 

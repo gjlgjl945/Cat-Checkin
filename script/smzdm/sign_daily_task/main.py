@@ -38,6 +38,7 @@ from api.api import SmzdmAPI
 from service import SmzdmService
 
 from notification import send_notification, NotificationSound
+from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 
 # ==================== 日志配置 ====================
 def setup_logger():
@@ -96,9 +97,9 @@ class SmzdmTaskManager:
         Args:
             config_path: 配置文件路径，默认为项目根目录下的config/token.json
         """
-        # 显式传入时按传入路径读取（便于 CI / 本地用临时配置做验证）；
-        # 不传则仍按仓库根目录定位，保持原有「可在任意 cwd 运行」的行为
-        self.config_path = Path(config_path) if config_path else Path(project_root) / "config" / "token.json"
+        # 每个平台只读自己那份配置：默认 config/token.smzdm.json，
+        # 旧 config/token.json 存在时会回退读取并提示迁移
+        self.config_path, self.config_source = resolve_path("smzdm", config_path, project_root)
         self.site_name = "什么值得买"
         self.accounts = []
         self.account_results = []  # 收集每个账号的执行结果
@@ -111,16 +112,21 @@ class SmzdmTaskManager:
 
             if not self.config_path.exists():
                 logger.error(f"❌ 配置文件不存在: {self.config_path}")
-                raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
+                raise FileNotFoundError(
+                    f"配置文件不存在: {self.config_path}（本平台应使用 config/token.smzdm.json）")
 
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
 
-                # 获取什么值得买的配置
-                smzdm_config = config.get('smzdm', {})
+                if self.config_source == SOURCE_LEGACY:
+                    logger.warning(
+                        "当前读取的是旧 config/token.json，建议拆分后删除；"
+                        "执行 python ci/migrate_config.py --apply 自动拆分")
+
+                # 取出属于什么值得买的那一个节点
+                # （兼容 {"smzdm":{...}} 与 {"accounts":[...]} 两种写法）
+                smzdm_config = normalize_node(config, 'smzdm')
                 raw_accounts = smzdm_config.get('accounts', [])
-                if not isinstance(raw_accounts, list):
-                    raise ValueError("配置项 smzdm.accounts 必须是数组")
                 # 丢弃非对象条目，避免一条写错的配置让整轮任务崩在 .get() 上
                 skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
                 self.accounts = [item for item in raw_accounts if isinstance(item, dict)]
@@ -788,7 +794,8 @@ class SmzdmTaskManager:
 def main():
     """主函数。退出码：0 全部成功，1 存在失败账号或运行异常。"""
     parser = argparse.ArgumentParser(description="什么值得买每日任务")
-    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--config", default=None,
+                        help="配置文件路径，默认 config/token.smzdm.json")
     parser.add_argument("--allow-failures", action="store_true",
                         help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")
     args = parser.parse_args()

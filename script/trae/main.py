@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api import TraeAPI, TraeWebAPI, login_refresh
 from notification import send_notification, NotificationSound
+from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 
 
 def _env_int(name: str, default: int) -> int:
@@ -126,10 +127,9 @@ class TraeTasks:
         Args:
             config_path (str): 配置文件的完整路径，如果为 None 则使用项目根目录下的 config/token.json
         """
-        if config_path is None:
-            self.config_path = project_root / "config" / "token.json"
-        else:
-            self.config_path = Path(config_path)
+        # 每个平台只读自己那份配置：默认 config/token.trae.json，
+        # 旧 config/token.json 存在时会回退读取并提示迁移
+        self.config_path, self.config_source = resolve_path("trae", config_path, project_root)
 
         self.accounts: List[Dict[str, Any]] = []
         self.logger = self._setup_logger()
@@ -160,18 +160,22 @@ class TraeTasks:
         return logger
 
     def _init_accounts(self):
-        """从配置文件的 trae 节点读取账号信息"""
+        """从本平台的配置文件里读取 trae 节点"""
         if not self.config_path.exists():
             self.logger.error(f"配置文件不存在: {self.config_path}")
-            raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
+            raise FileNotFoundError(
+                f"配置文件不存在: {self.config_path}（本平台应使用 config/token.trae.json）")
 
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
-            trae_config = config_data.get('trae', {})
+            if self.config_source == SOURCE_LEGACY:
+                self.logger.warning(
+                    "当前读取的是旧 config/token.json，建议拆分后删除；"
+                    "执行 python ci/migrate_config.py --apply 自动拆分")
+            # 取出属于 Trae 的那一个节点（兼容 {"trae":{...}} 与 {"accounts":[...]} 两种写法）
+            trae_config = normalize_node(config_data, 'trae')
             raw_accounts = trae_config.get('accounts', [])
-            if not isinstance(raw_accounts, list):
-                raise ValueError("配置项 trae.accounts 必须是数组")
             # 只保留 CN 账号（签到积分接口仅存在于 Trae CN）；非字典条目直接丢弃，
             # 避免一条写错的配置让整轮任务在 .get() 上崩掉
             skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
@@ -642,7 +646,8 @@ def main() -> int:
       1  存在签到失败的账号，或配置/运行异常
     """
     parser = argparse.ArgumentParser(description="Trae CN 每日签到")
-    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--config", default=None,
+                        help="配置文件路径，默认 config/token.trae.json")
     parser.add_argument("--dry-run", action="store_true", help="只查状态，不领取积分")
     parser.add_argument("--allow-failures", action="store_true",
                         help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")

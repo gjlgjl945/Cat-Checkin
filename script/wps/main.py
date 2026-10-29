@@ -40,6 +40,7 @@ from logging_utils import (
     log_startup,
 )
 from notification import send_notification, NotificationSound
+from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 from task_center import WPSTaskCenterPage
 
 
@@ -47,11 +48,9 @@ class WPSMultiPageRunner:
     """WPS 多页面任务统一入口"""
 
     def __init__(self, config_path: str = None):
-        if config_path is None:
-            self.config_path = project_root / "config" / "token.json"
-        else:
-            self.config_path = Path(config_path)
-
+        # 每个平台只读自己那份配置：默认 config/token.wps.json，
+        # 旧 config/token.json 存在时会回退读取并提示迁移
+        self.config_path, self.config_source = resolve_path("wps", config_path, project_root)
         self.logger = self._setup_logger()
         self.accounts: List[Dict[str, Any]] = self._load_accounts()
         self.account_results: List[Dict[str, Any]] = []
@@ -65,17 +64,22 @@ class WPSMultiPageRunner:
         return bind_logger(get_logger("main"), page="主入口")
 
     def _load_accounts(self) -> List[Dict[str, Any]]:
-        """读取统一的 WPS 账号配置。"""
+        """读取本平台自己的配置文件。"""
         if not self.config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
+            raise FileNotFoundError(
+                f"配置文件不存在: {self.config_path}（本平台应使用 config/token.wps.json）")
 
         with open(self.config_path, "r", encoding="utf-8") as file:
             config_data = json.load(file)
 
-        wps_config = config_data.get("wps", {})
+        if self.config_source == SOURCE_LEGACY:
+            self.logger.warning(
+                "当前读取的是旧 config/token.json，建议拆分后删除；"
+                "执行 python ci/migrate_config.py --apply 自动拆分")
+
+        # 取出属于 WPS 的那一个节点（兼容 {"wps":{...}} 与 {"accounts":[...]} 两种写法）
+        wps_config = normalize_node(config_data, "wps")
         raw_accounts = wps_config.get("accounts", [])
-        if not isinstance(raw_accounts, list):
-            raise ValueError("配置项 wps.accounts 必须是数组")
         # 丢弃非对象条目，避免一条写错的配置让整轮任务崩在 .get() 上
         skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
         accounts = [item for item in raw_accounts if isinstance(item, dict)]

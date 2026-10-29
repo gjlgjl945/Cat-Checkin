@@ -29,6 +29,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from notification import send_notification, NotificationSound
+from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 from api import KanxueAPI
 
 # 配置日志
@@ -47,14 +48,11 @@ class KanxueSignInManager:
         初始化签到管理器
 
         Args:
-            config_path: 配置文件路径，默认为项目根目录下的config/token.json
+            config_path: 配置文件路径；默认读本平台自己的 config/token.kanxue.json
         """
-        if config_path is None:
-            config_path = project_root / "config" / "token.json"
-        else:
-            config_path = Path(config_path)
-
-        self.config_path = config_path
+        # 每个平台只读自己那份配置：默认 config/token.kanxue.json，
+        # 旧 config/token.json 存在时会回退读取并提示迁移
+        self.config_path, self.config_source = resolve_path("kanxue", config_path, project_root)
         self.site_name = "看雪论坛"
         self.accounts = []
         self.load_config()
@@ -63,17 +61,21 @@ class KanxueSignInManager:
         """加载配置文件"""
         try:
             logger.info(f"正在读取配置文件: {self.config_path}")
+            if not self.config_path.exists():
+                raise FileNotFoundError(
+                    f"配置文件不存在: {self.config_path}（本平台应使用 config/token.kanxue.json）")
+
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
 
-            # 获取看雪论坛的配置
-            kanxue_config = config.get('kanxue', {})
-            # 兼容嵌套结构
-            if 'kanxue' in kanxue_config:
-                kanxue_config = kanxue_config.get('kanxue', {})
+            if self.config_source == SOURCE_LEGACY:
+                logger.warning(
+                    "当前读取的是旧 config/token.json，建议拆分后删除；"
+                    "执行 python ci/migrate_config.py --apply 自动拆分")
+
+            # 取出属于看雪的那一个节点（兼容 {"kanxue":{...}} 与 {"accounts":[...]} 两种写法）
+            kanxue_config = normalize_node(config, "kanxue")
             raw_accounts = kanxue_config.get('accounts', [])
-            if not isinstance(raw_accounts, list):
-                raise ValueError("配置项 kanxue.accounts 必须是数组")
             # 丢弃非对象条目：一条格式写错的配置不应让整轮任务在 .get() 上崩掉
             skipped = sum(1 for item in raw_accounts if not isinstance(item, dict))
             self.accounts = [item for item in raw_accounts if isinstance(item, dict)]
@@ -261,7 +263,8 @@ class KanxueSignInManager:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="看雪论坛每日签到")
-    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--config", default=None,
+                        help="配置文件路径，默认 config/token.kanxue.json")
     parser.add_argument("--allow-failures", action="store_true",
                         help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")
     args = parser.parse_args()

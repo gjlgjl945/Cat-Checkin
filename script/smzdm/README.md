@@ -24,7 +24,7 @@ pip install requests
 
 ## ⚙️ 配置说明
 
-在项目根目录的 `config/token.json` 中配置您的账号信息：
+本平台只读自己那份配置 `config/token.smzdm.json`（旧 `config/token.json` 仍可用，但会在日志里提示迁移）：
 自行抓包获取相关内容,在headers中找到相关字段(搜索)
 ```json
 {
@@ -43,9 +43,9 @@ pip install requests
 
 ### 配置文件位置
 
-- **默认路径**: `ZaiZaiCat-Checkin/config/token.json`
-- **结构说明**: 配置文件采用统一管理，支持多个平台配置
-- **smzdm 节点**: 什么值得买相关配置都在此节点下
+- **默认路径**: `config/token.smzdm.json`
+- **结构说明**: 一份文件一个平台，只放 `smzdm` 节点；也接受省略外层、直接写 `{"accounts": [...]}`
+- **兼容**: 该文件不存在时会回退到旧的 `config/token.json`，并提示迁移
 
 ### Cookie 获取方法
 

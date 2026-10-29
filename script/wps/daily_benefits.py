@@ -42,6 +42,7 @@ from logging_utils import (
     log_task_result,
 )
 from notification import send_notification, NotificationSound
+from platform_config import normalize_node, resolve_path
 
 
 class DailyBenefitsAPI:
@@ -921,10 +922,8 @@ class DailyBenefitsTasks:
     page_name = "天天领福利"
 
     def __init__(self, config_path: str = None, enable_notification: bool = True, load_accounts: bool = True):
-        if config_path is None:
-            self.config_path = project_root / "config" / "token.json"
-        else:
-            self.config_path = Path(config_path)
+        # 与主入口一致：默认只读本平台的 config/token.wps.json
+        self.config_path, _ = resolve_path("wps", config_path, project_root)
 
         self.enable_notification = enable_notification
         self.logger = self._setup_logger()
@@ -967,8 +966,8 @@ class DailyBenefitsTasks:
         except json.JSONDecodeError as exc:
             raise ValueError(f"配置文件 JSON 解析失败: {exc}") from exc
 
-        wps_config = config_data.get("wps", {})
-        self.accounts = wps_config.get("accounts", [])
+        wps_config = normalize_node(config_data, "wps")
+        self.accounts = [a for a in wps_config.get("accounts", []) if isinstance(a, dict)]
 
         if self.accounts:
             self.logger.info(f"成功加载 {len(self.accounts)} 个 WPS 账号")

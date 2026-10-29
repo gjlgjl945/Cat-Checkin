@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 project_root = Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = project_root / "config" / "token.json"
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+from platform_config import platform_config_path  # noqa: E402 - 依赖上面的 sys.path 设置
+
+# 导入只写本平台自己的配置文件，不会再碰 config/token.json
+CONFIG_PATH = platform_config_path("trae", project_root)
 
 # cockpit-tools 的 Trae 账号目录与密钥文件名
 ACCOUNTS_DIR_NAME = "trae_accounts"

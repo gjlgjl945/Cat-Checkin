@@ -61,7 +61,7 @@ wps/
 
 ### 1. 账号配置
 
-在项目根目录的 `config/token.json` 文件中配置WPS账号信息：
+本平台只读自己那份配置 `config/token.wps.json`（旧 `config/token.json` 仍可用，但会在日志里提示迁移）：
 
 ```json
 {
