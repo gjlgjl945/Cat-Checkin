@@ -21,6 +21,7 @@ Date: 2026-03-11
 
 import json
 import logging
+import os
 import random
 import sys
 import time
@@ -40,7 +41,7 @@ from logging_utils import (
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from notification import send_notification, NotificationSound
+from notification import send_notification
 from platform_config import normalize_node, resolve_path
 
 
@@ -414,11 +415,15 @@ class WPSTaskCenterPage:
             if result != self.account_results[-1]:
                 content_lines.append("")
 
+        # 汇总模式下不单独推送（主入口默认 enable_notification=False，这里是兜底）
+        if os.environ.get("CHECKIN_RESULT_DIR"):
+            self.logger.info("汇总模式下跳过页面级推送")
+            return
+
         try:
             send_notification(
                 title="WPS任务中心结果通知",
-                content="\n".join(content_lines),
-                sound=NotificationSound.BIRDSONG
+                content="\n".join(content_lines)
             )
             self.logger.info("✅ 任务中心推送通知已发送")
         except Exception as exc:

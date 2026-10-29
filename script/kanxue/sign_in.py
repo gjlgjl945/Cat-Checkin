@@ -28,7 +28,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from notification import send_notification, NotificationSound
+from checkin_result import defer_notification, write_result
+from notification import send_notification
 from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 from api import KanxueAPI
 
@@ -189,13 +190,10 @@ class KanxueSignInManager:
             # 构建通知标题
             if failed_count == 0:
                 title = f"{self.site_name}签到成功 ✅"
-                sound = NotificationSound.BIRDSONG
             elif success_count == 0:
                 title = f"{self.site_name}签到失败 ❌"
-                sound = NotificationSound.ALARM
             else:
                 title = f"{self.site_name}签到部分成功 ⚠️"
-                sound = NotificationSound.BELL
 
             # 构建通知内容
             content_parts = [f"📊 执行统计:"]
@@ -245,16 +243,17 @@ class KanxueSignInManager:
 
             content = "\n".join(content_parts)
 
-            # 发送通知
-            delivered = send_notification(
-                title=title,
-                content=content,
-                sound=sound
-            )
-            if delivered:
-                logger.info(f"✅ {self.site_name}签到推送发送成功: {', '.join(delivered)}")
+            # CI 里不单独推送：交给汇总作业合并成一条，避免一天 8 条打爆免费额度
+            if defer_notification():
+                path = write_result("kanxue", self.site_name, total_count,
+                                    success_count, failed_count, content_parts)
+                logger.info(f"结果已写入 {path}，由汇总作业统一推送" if path else "结果落盘失败，不影响签到")
+                return
+
+            if send_notification(title=title, content=content):
+                logger.info(f"✅ {self.site_name}签到推送已发送")
             else:
-                logger.info("未配置可用的推送通道，跳过通知")
+                logger.info("未发送推送（具体原因见上一行）")
 
         except Exception as e:
             logger.error(f"❌ {self.site_name}推送通知失败: {str(e)}", exc_info=True)
@@ -353,10 +352,10 @@ def main():
                     f"💬 错误信息: {str(e)}\n"
                     f"⏱️ 执行耗时: {int(duration)}秒\n"
                     f"🕐 完成时间: {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                ),
-                sound=NotificationSound.ALARM
+                )
             )
-        except:
+        except Exception:
+            # 通知失败不影响退出码：真正的失败原因已经写进日志与返回值
             pass
 
         return 1

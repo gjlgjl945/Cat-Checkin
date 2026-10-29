@@ -17,7 +17,6 @@ import time
 import random
 import sys
 import os
-from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime
 
@@ -37,7 +36,8 @@ if smzdm_dir not in sys.path:
 from api.api import SmzdmAPI
 from service import SmzdmService
 
-from notification import send_notification, NotificationSound
+from checkin_result import defer_notification, write_result
+from notification import send_notification
 from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 
 # ==================== 日志配置 ====================
@@ -621,17 +621,21 @@ class SmzdmTaskManager:
 
             content = "\n".join(content_parts)
 
-            # 发送推送
-            delivered = send_notification(
-                title=title,
-                content=content,
-                sound=NotificationSound.BIRDSONG,
-                group=self.site_name
-            )
-            if delivered:
-                logger.info(f"✅ {self.site_name}任务汇总推送发送成功: {', '.join(delivered)}")
+            # CI 里不单独推送：交给汇总作业合并成一条，避免一天 8 条打爆免费额度
+            if defer_notification():
+                stats = self.stats()
+                path = write_result("smzdm", self.site_name, stats['total'],
+                                    stats['success'], stats['failed'], content_parts)
+                if path:
+                    logger.info(f"结果已写入 {path}，由汇总作业统一推送")
+                else:
+                    logger.warning("结果落盘失败，不影响签到")
+                return
+
+            if send_notification(title=title, content=content):
+                logger.info(f"✅ {self.site_name}任务汇总推送已发送")
             else:
-                logger.info("未配置可用的推送通道，跳过通知")
+                logger.info("未发送推送（具体原因见上一行）")
 
         except Exception as e:
             logger.error(f"❌ 发送任务汇总推送失败: {str(e)}", exc_info=True)
@@ -869,9 +873,7 @@ def main():
                     f"💬 错误信息: {str(e)}\n"
                     f"⏱️ 执行耗时: {int(duration)}秒\n"
                     f"🕐 完成时间: {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                ),
-                sound=NotificationSound.ALARM,
-                group="什么值得买"
+                )
             )
         except Exception:
             # 通知失败不影响退出码：真正的失败原因已经写进日志与返回值

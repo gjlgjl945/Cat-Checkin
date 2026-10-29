@@ -55,7 +55,8 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api import TraeAPI, TraeWebAPI, login_refresh
-from notification import send_notification, NotificationSound
+from checkin_result import defer_notification, write_result
+from notification import send_notification
 from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 
 
@@ -623,16 +624,21 @@ class TraeTasks:
 
         content = "\n".join(content_lines)
 
-        try:
-            delivered = send_notification(
-                title=title,
-                content=content,
-                sound=NotificationSound.BIRDSONG
-            )
-            if delivered:
-                self.logger.info(f"✅ 推送通知已发送: {', '.join(delivered)}")
+        # CI 里不单独推送：交给汇总作业合并成一条，避免一天 8 条打爆免费额度
+        if defer_notification():
+            path = write_result("trae", "Trae CN", stats['total'],
+                                stats['success'] + stats['already'], stats['failed'], content_lines)
+            if path:
+                self.logger.info(f"结果已写入 {path}，由汇总作业统一推送")
             else:
-                self.logger.info("未配置可用的推送通道，跳过通知")
+                self.logger.warning("结果落盘失败，不影响签到")
+            return
+
+        try:
+            if send_notification(title=title, content=content):
+                self.logger.info("✅ 推送通知已发送")
+            else:
+                self.logger.info("未发送推送（具体原因见上一行）")
         except Exception as e:
             self.logger.warning(f"⚠️ 发送推送通知失败: {str(e)}")
 

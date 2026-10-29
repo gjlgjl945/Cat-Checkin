@@ -218,3 +218,9 @@ config/*.secret.json
 
 # 脚本运行时日志（CI 仅作为失败工件上传）
 script/smzdm/smzdm_task.log
+
+# 汇总推送的中间结果（CI 里作为工件上传，不入库）
+.checkin-results/
+
+# 本地待办便签（个人笔记，不入库）
+待办.txt

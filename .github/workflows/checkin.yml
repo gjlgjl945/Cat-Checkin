@@ -42,6 +42,9 @@ env:
   PYTHONUTF8: "1"
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # 平台脚本把结果写到这里，由「汇总推送」作业合并成一条通知。
+  # 设置了这个变量，脚本就不会自己发推送（本地不加则照旧直接发）。
+  CHECKIN_RESULT_DIR: .checkin-results
   # 关闭 Trae 脚本内置的启动随机抖动：CI 队列本身已错峰，抖动只会白占超时预算。
   # 脚本在 CI 环境下默认即为 0，这里显式写死便于排查；需要错峰改为 "600"。
   TRAE_JITTER_MAX: "0"
@@ -155,30 +158,8 @@ jobs:
           ENTRY_TIMEOUT_SECONDS: ${{ matrix.timeout }}
           RETRY_MAX: ${{ vars.CHECKIN_RETRY_MAX || '1' }}
           RETRY_DELAY_SECONDS: ${{ vars.CHECKIN_RETRY_DELAY_SECONDS || '15' }}
-          # ---- 推送配置（二选一：NOTIFICATION_JSON Secret 或下列环境变量）----
-          BARK_PUSH: ${{ secrets.BARK_PUSH || vars.BARK_PUSH }}
-          BARK_ICON: ${{ secrets.BARK_ICON || vars.BARK_ICON }}
-          BARK_SOUND: ${{ secrets.BARK_SOUND || vars.BARK_SOUND }}
-          BARK_GROUP: ${{ secrets.BARK_GROUP || vars.BARK_GROUP }}
-          BARK_LEVEL: ${{ secrets.BARK_LEVEL || vars.BARK_LEVEL }}
-          BARK_URL: ${{ secrets.BARK_URL || vars.BARK_URL }}
-          SCKEY: ${{ secrets.SCKEY || vars.SCKEY }}
-          SENDKEY: ${{ secrets.SENDKEY || vars.SENDKEY }}
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN || vars.PUSHPLUS_TOKEN }}
-          PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC || vars.PUSHPLUS_TOPIC }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN || vars.TG_BOT_TOKEN }}
-          TG_USER_ID: ${{ secrets.TG_USER_ID || vars.TG_USER_ID }}
-          TG_API_HOST: ${{ secrets.TG_API_HOST || vars.TG_API_HOST }}
-          FSKEY: ${{ secrets.FSKEY || vars.FSKEY }}
-          DINGTALK_ACCESS_TOKEN: ${{ secrets.DINGTALK_ACCESS_TOKEN || vars.DINGTALK_ACCESS_TOKEN }}
-          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET || vars.DINGTALK_SECRET }}
-          QYWX_KEY: ${{ secrets.QYWX_KEY || vars.QYWX_KEY }}
-          QYWX_ORIGIN: ${{ secrets.QYWX_ORIGIN || vars.QYWX_ORIGIN }}
-          GOTIFY_URL: ${{ secrets.GOTIFY_URL || vars.GOTIFY_URL }}
-          GOTIFY_TOKEN: ${{ secrets.GOTIFY_TOKEN || vars.GOTIFY_TOKEN }}
-          NTFY_URL: ${{ secrets.NTFY_URL || vars.NTFY_URL }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || vars.NTFY_TOPIC }}
-          PUSHDEER_PUSHKEY: ${{ secrets.PUSHDEER_PUSHKEY || vars.PUSHDEER_PUSHKEY }}
+          # 推送不在这里发：脚本只把结果写成 JSON，由后面的「汇总推送」作业合并成一条。
+          # 这样四个平台跑完只发 1 条，不会把 Server酱 免费额度（5 条/天）打爆。
         run: bash ci/run_entry.sh "${{ matrix.entry }}"
 
       - name: 写入任务摘要
@@ -197,6 +178,16 @@ jobs:
             echo "| 任务状态 | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 运行结果（不是凭据）：供「汇总推送」作业合并成一条通知
+      - name: 上传运行结果
+        if: always() && steps.guard.outputs.configured == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: result-${{ matrix.key }}
+          path: ${{ env.CHECKIN_RESULT_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 3
+
       # 只上传脚本自身产生的运行日志；config/ 内含凭据，任何情况下都不作为工件上传
       - name: 上传运行日志（仅失败时）
         if: failure()
@@ -207,3 +198,53 @@ jobs:
             **/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  # 等所有平台跑完后合并结果，只推一条 Server酱 消息。
+  # always() 是必要的：某个平台失败时仍要把「谁失败了」推出去，否则失败反而收不到通知。
+  notify:
+    name: 汇总推送
+    needs: checkin
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 设置 Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装 Python 依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 只为了拿到 Server酱 SendKey；账号配置不需要（汇总只看结果文件）
+      - name: 还原推送配置
+        uses: ./.github/actions/prepare-config
+        with:
+          notification_json: ${{ secrets.NOTIFICATION_JSON }}
+
+      - name: 收集各平台结果
+        uses: actions/download-artifact@v8
+        with:
+          pattern: result-*
+          path: ${{ env.CHECKIN_RESULT_DIR }}
+          merge-multiple: true
+
+      - name: 合并推送
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY || secrets.SENDKEY }}
+          # 与 checkin 用同一份 platforms 过滤，否则只跑一个平台时会把其余平台误报成「无结果」
+          SELECT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || '' }}
+        run: |
+          python ci/summarize.py --dir "$CHECKIN_RESULT_DIR" --select "$SELECT"
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::汇总推送失败（退出码 $rc）"
+            exit "$rc"
+          fi

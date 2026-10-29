@@ -39,7 +39,8 @@ from logging_utils import (
     log_banner,
     log_startup,
 )
-from notification import send_notification, NotificationSound
+from checkin_result import defer_notification, write_result
+from notification import send_notification
 from platform_config import SOURCE_LEGACY, normalize_node, resolve_path
 from task_center import WPSTaskCenterPage
 
@@ -241,18 +242,22 @@ class WPSMultiPageRunner:
             if account_result != self.account_results[-1]:
                 content_lines.append("")
 
-        try:
-            delivered = send_notification(
-                title="WPS多页面任务结果通知",
-                content="\n".join(content_lines),
-                sound=NotificationSound.BIRDSONG
-            )
-            if delivered:
-                self.logger.info("统一推送通知已发送: %s", ", ".join(delivered))
+        # CI 里不单独推送：交给汇总作业合并成一条，避免一天 8 条打爆免费额度
+        if defer_notification():
+            path = write_result("wps", "WPS Office", total, success, failed, content_lines)
+            if path:
+                self.logger.info("结果已写入 %s，由汇总作业统一推送", path)
             else:
-                self.logger.info("未配置可用的推送通道，跳过通知")
+                self.logger.warning("结果落盘失败，不影响签到")
+            return
+
+        try:
+            if send_notification(title="WPS多页面任务结果通知", content="\n".join(content_lines)):
+                self.logger.info("推送已发送")
+            else:
+                self.logger.info("未发送推送（具体原因见上一行）")
         except Exception as exc:
-            self.logger.warning("发送统一推送通知失败: %s", exc)
+            self.logger.warning("发送推送失败: %s", exc)
 
 
 def main() -> int:

@@ -1,65 +1,7 @@
 {
-  "bark": {
-    "push": "",
-    "icon": "",
-    "sound": "birdsong",
-    "group": "ZaiZaiCat-Checkin",
-    "level": "active",
-    "url": ""
-  },
+  "_说明": "这只是模板，代码不会读本文件。把 sendkey 填到 config/notification.json 的 server 节点；SCT 开头=Server酱Turbo，sctp 开头=Server酱³。也可以改用 Secret: SERVERCHAN_SENDKEY",
   "server": {
     "sckey": "",
     "sendkey": ""
-  },
-  "coolpush": {
-    "skey": "",
-    "qq": true,
-    "wx": false,
-    "email": false
-  },
-  "qmsg": {
-    "key": "",
-    "type": "private"
-  },
-  "telegram": {
-    "bot_token": "",
-    "user_id": "",
-    "api_host": "",
-    "proxy": ""
-  },
-  "feishu": {
-    "key": ""
-  },
-  "dingtalk": {
-    "access_token": "",
-    "secret": ""
-  },
-  "qywx": {
-    "key": "",
-    "corpid": "",
-    "agentid": "",
-    "corpsecret": "",
-    "touser": "",
-    "media_id": "",
-    "origin": ""
-  },
-  "pushplus": {
-    "token": "",
-    "topic": ""
-  },
-  "pushdeer": {
-    "pushkey": "",
-    "url": "https://api2.pushdeer.com/message/push",
-    "type": "text"
-  },
-  "gotify": {
-    "url": "",
-    "token": "",
-    "priority": "3"
-  },
-  "ntfy": {
-    "url": "https://ntfy.sh",
-    "topic": "",
-    "priority": "3"
   }
 }

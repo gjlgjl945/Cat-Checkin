@@ -84,20 +84,22 @@ python ci/platform_guard.py --validate
 | `TOKEN_SMZDM_JSON` | 按需 | `config/token.smzdm.json` 的 base64 或 JSON 原文 |
 | `TOKEN_TRAE_JSON` | 按需 | `config/token.trae.json` 的 base64 或 JSON 原文 |
 | `TOKEN_JSON` | 兼容 | 旧用法：一份含多平台的 JSON，动作会自动按平台拆开 |
-| `NOTIFICATION_JSON` | 否 | `config/notification.json` 的 base64 或 JSON 原文；不推送可跳过 |
+| `SERVERCHAN_SENDKEY` | 否 | Server酱的 SendKey，只发通知时用；与 `NOTIFICATION_JSON` 二选一 |
+| `NOTIFICATION_JSON` | 否 | `config/notification.json` 的 base64 或 JSON 原文；不想配 Secret 时可跳过 |
 
 至少要配一个平台，否则工作流会在校验阶段报「没有任何平台配置了有效账号」。
 
 **某个平台的账号过期时，只替换它自己的那个 Secret 即可**，其它平台完全不受影响；
 同名平台如果同时存在独立 Secret 和 `TOKEN_JSON`，以独立 Secret 为准。
 
-推送也可改用环境变量注入（与 `NOTIFICATION_JSON` 二选一，工作流已把常用通道映射进来）：
-`BARK_PUSH`、`BARK_ICON`、`BARK_SOUND`、`BARK_GROUP`、`BARK_LEVEL`、`BARK_URL`、`SCKEY`、`SENDKEY`、
-`PUSHPLUS_TOKEN`、`PUSHPLUS_TOPIC`、`TG_BOT_TOKEN`、`TG_USER_ID`、`TG_API_HOST`、`FSKEY`、
-`DINGTALK_ACCESS_TOKEN`、`DINGTALK_SECRET`、`QYWX_KEY`、`QYWX_ORIGIN`、`GOTIFY_URL`、`GOTIFY_TOKEN`、
-`NTFY_URL`、`NTFY_TOPIC`、`PUSHDEER_PUSHKEY`。
-其余通道（CoolPush、Qmsg、企业微信应用等）请用 `NOTIFICATION_JSON`，字段见
-[`config/template_notification.json`](config/template_notification.json)。
+### 通知：只支持 Server酱，且四个平台合并成一条
+
+- 支持的 SendKey 有两种，按前缀自动选接口，不用配域名：
+  - `SCT` 开头 → Server酱 Turbo（推送到微信服务号）
+  - `sctp` 开头 → Server酱³（推送到独立 App，域名里的 uid 自动解析）
+- 免费额度 **每天 5 条**。四个平台各自推送 + 一天两次运行 = 8 条，必然超限，
+  所以现在改成：平台脚本只把结果写成 JSON，等全部跑完由「汇总推送」作业发**一条**摘要。
+- 本地运行（不设 `CHECKIN_RESULT_DIR`）时脚本仍会自己推送。
 
 ### 4. 启用 Workflow
 进入 **Actions** 标签页，点击 **"I understand my workflows, go ahead and enable them"** 启用工作流。
@@ -124,10 +126,14 @@ python ci/platform_guard.py --validate
   - `CHECKIN_RETRY_MAX`：最大尝试次数，默认 `1`
   - `CHECKIN_RETRY_DELAY_SECONDS`：重试等待基数，默认 `15`
 - Trae 脚本在 CI 环境下自动关闭启动抖动；工作流里另有 `TRAE_JITTER_MAX: "0"` 显式固定，需要错峰改为 `600` 即可
+- **汇总推送**：`checkin` 之后有一个 `notify` 作业（`needs: checkin` + `always()`）。
+  它收集各平台的结果文件，合并成一条 Server酱 消息再发出去——
+  某平台失败时同样会推送（否则「失败」反而没有通知）。没有任何结果时不发。
 
 ### 6. 查看执行结果
 - **Actions** 标签页按平台展示 job 状态，点进去可看完整日志
-- 每次 job 会写一张摘要表到运行详情页（平台、入口、是否已配置、账号数、超时、状态）
+- 每个 job 会写一张摘要表到运行详情页（平台、入口、是否已配置、账号数、超时、状态）
+- 最后一个「汇总推送」job 里有合并后的完整内容，同时写进运行摘要（不点日志也能看）
 - 失败时上传 `logs-<平台key>` 工件（`**/*.log`，保留 7 天）。
   出于安全考虑，**`config/` 目录不作为工件上传**——其中含可直接复用的登录凭据
 
@@ -404,6 +410,7 @@ Cat-Checkin/
 ├── ci/
 │   ├── platform_guard.py            # 平台守卫：配置校验 / 平台筛选 / 矩阵一致性校验
 │   ├── migrate_config.py            # 把旧的单文件配置拆成按平台独立的文件
+│   ├── summarize.py                 # 汇总各平台结果，只推一条通知
 │   └── run_entry.sh                 # 统一入口包装：超时、重试、退出码
 ├── config/
 │   ├── template_notification.json   # 推送配置模板（含全部字段说明）
@@ -419,7 +426,8 @@ Cat-Checkin/
 │   ├── smzdm/                       # 什么值得买
 │   └── trae/                        # Trae CN（含本机账号导入工具）
 ├── platform_config.py               # 配置定位与解包：文件名规则 / 旧文件回退 / 结构校验
-├── notification.py                  # 推送模块（文件 > 环境变量 > 默认值）
+├── checkin_result.py                # 运行结果落盘（CI 汇总推送的输入）
+├── notification.py                  # 推送模块：仅 Server酱（Turbo / Server酱³ 自动识别）
 ├── requirements.txt
 └── README.md
 ```
@@ -466,8 +474,20 @@ A：退出码 1。因为「跑了但什么都没做」和「跑成功了」是�
 如果确实只想跑空转验证，用 `--allow-failures`。
 
 **Q：怎么做一次不发推送的演练？**
-A：设置环境变量 `NOTIFICATION_DISABLED=1`，所有推送通道都会被跳过，日志里会明确写「未配置可用的推送通道 / 已跳过」。
-平时日志里若出现「推送通知已发送: Bark」这样的行，说明确实有通道返回了成功；没有通道时不会再假装发送成功。
+A：设置 `NOTIFICATION_DISABLED=1`，不会发出任何外部请求，日志会写「已设置 NOTIFICATION_DISABLED，跳过推送」。
+
+**Q：SendKey 配好了，微信却没收到消息？**
+A：按这个顺序查（也是官方给的排查顺序）：
+
+1. **key 放对文件了吗**——代码只读 `config/notification.json`（或环境变量 `SERVERCHAN_SENDKEY`）。
+   写进 `config/template_notification.json` 是**不会生效**的，因为那是公开模板。
+2. **看返回值**：本项目的日志会打印 `推送已被服务端接受（pushid=…）` 或 `推送失败 code=…: message`。
+   `code` 非 0 时 `message` 会说明原因（额度、限流、key 无效）。
+3. **额度**：免费版每天 5 条、每分钟 50 条。四个平台各推一次 + 一天两次 = 8 条必然超限——
+   这也是本项目改成「汇总成一条」的原因。
+4. **微信侧**：是否还在关注「方糖」服务号（取关/屏蔽就收不到），以及 Server酱后台的「通道配置」
+   是否完成了微信绑定（绑到企业微信/钉钉也算成功，但微信里不会有消息）。
+5. 自检命令：`python notification.py`——打印通道状态并发一条「推送自检」，成功即链路通。
 
 **Q：新增一个平台要改哪些地方？**
 A：两处必须一起改（漏改会被 CI 拦下）：① `ci/platform_guard.py` 的 `PLATFORMS` 加一行；

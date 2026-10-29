@@ -21,6 +21,7 @@ Date: 2026-03-11
 
 import json
 import logging
+import os
 import random
 import sys
 import time
@@ -41,7 +42,7 @@ from logging_utils import (
     log_page_switch,
     log_task_result,
 )
-from notification import send_notification, NotificationSound
+from notification import send_notification
 from platform_config import normalize_node, resolve_path
 
 
@@ -2060,11 +2061,15 @@ class DailyBenefitsTasks:
             if item != self.account_results[-1]:
                 content_lines.append("")
 
+        # 汇总模式下不单独推送（主入口默认 enable_notification=False，这里是兜底）
+        if os.environ.get("CHECKIN_RESULT_DIR"):
+            self.logger.info("汇总模式下跳过页面级推送")
+            return
+
         try:
             send_notification(
                 title="WPS 天天领福利结果通知",
-                content="\n".join(content_lines),
-                sound=NotificationSound.BIRDSONG
+                content="\n".join(content_lines)
             )
             self.logger.info("✅ 推送通知已发送")
         except Exception as exc:

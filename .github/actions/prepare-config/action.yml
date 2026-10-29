@@ -199,15 +199,6 @@ runs:
                 # 通知配错不影响签到，只是这次不发推送
                 print("::notice::通知配置未生效，本次不发送推送（不妨碍签到）")
         else:
-            print("::notice::未提供 NOTIFICATION_JSON，改用环境变量或直接跳过推送")
+            print("::notice::未提供 NOTIFICATION_JSON，本次不发送推送")
 
-        env_channels = [
-            name for name in (
-                "BARK_PUSH", "SCKEY", "SENDKEY", "PUSHPLUS_TOKEN", "TG_BOT_TOKEN",
-                "FSKEY", "DINGTALK_ACCESS_TOKEN", "QYWX_KEY", "GOTIFY_URL",
-                "NTFY_URL", "PUSHDEER_PUSHKEY",
-            ) if os.environ.get(name)
-        ]
-        if env_channels:
-            print("::notice::检测到通过环境变量注入的推送通道：" + ", ".join(env_channels))
         PY
