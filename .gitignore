@@ -215,5 +215,4 @@ config/*.secret.json
 .trae/
 
 # 脚本运行时日志（CI 仅作为失败工件上传）
-script/shyp/shyp_tasks.log
 script/smzdm/smzdm_task.log

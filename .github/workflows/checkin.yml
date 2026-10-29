@@ -4,7 +4,7 @@ name: 多平台每日签到
 #   - 官方 Action 统一升到 v7 系列：runs.using 为 node24，规避 Node 20 弃用告警
 #   - 运行器显式固定 ubuntu-24.04：ubuntu-latest 自 2026-10-19 起逐步迁移到 Ubuntu 26，
 #     固定镜像可避免「某天突然换系统」导致的依赖/证书差异；验证通过后再整体切换
-#   - setup-node 固定 24：Node 20 已 EOL，顺丰 code.js 仅用 Buffer/crypto.randomUUID，24 下兼容
+#   - 已无平台需要 Node.js：原顺丰脚本的 code.js 已随平台裁剪一并移除
 
 # 触发方式
 #   定时：北京时间每天 08:12 / 14:12（UTC 00:12 / 06:12）
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "只运行指定平台，key 用英文逗号分隔（sf,kanxue,wps...），留空=全部已配置平台"
+        description: "只运行指定平台，key 用英文逗号分隔（kanxue,wps,smzdm,trae），留空=全部已配置平台"
         required: false
         type: string
         default: ""
@@ -42,10 +42,9 @@ env:
   PYTHONUTF8: "1"
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  # 关闭脚本内置的启动随机抖动：CI 队列本身已错峰，抖动只会白占超时预算。
-  # 若需要保留错峰，改为 "600" 即可，无需改代码。
+  # 关闭 Trae 脚本内置的启动随机抖动：CI 队列本身已错峰，抖动只会白占超时预算。
+  # 脚本在 CI 环境下默认即为 0，这里显式写死便于排查；需要错峰改为 "600"。
   TRAE_JITTER_MAX: "0"
-  WORKBUDDY_JITTER_MAX: "0"
 
 jobs:
   # 先做一次集中校验：配置有问题时快速失败，避免十多个平台 job 一起报错。
@@ -98,20 +97,10 @@ jobs:
       # 在 job 内判定后跳过——位置放在装依赖之前，跳过的 job 只花十几秒。
       matrix:
         include:
-          - { key: sf, name: 顺丰速运, entry: script/sf/main.py, node: true, timeout: 900 }
-          - { key: kanxue, name: 看雪论坛, entry: script/kanxue/sign_in.py, node: false, timeout: 300 }
-          - { key: enshan, name: 恩山论坛, entry: script/enshan/sign_in.py, node: false, timeout: 300 }
-          - { key: shyp, name: 上海杨浦, entry: script/shyp/main.py, node: false, timeout: 1200 }
-          - { key: huaruntong_999, name: 华润通-万象星, entry: script/huaruntong/999/main.py, node: false, timeout: 900 }
-          - { key: huaruntong_wx, name: 华润通-微信版, entry: script/huaruntong/huaruntong_wx/main.py, node: false, timeout: 600 }
-          - { key: huaruntong_wenti, name: 华润通-文体未来荟, entry: script/huaruntong/wentiweilaihui/main.py, node: false, timeout: 600 }
-          - { key: erke, name: 鸿星尔克, entry: script/erke/main.py, node: false, timeout: 600 }
-          - { key: wps, name: WPS Office, entry: script/wps/main.py, node: false, timeout: 1500 }
-          - { key: smzdm, name: 什么值得买, entry: script/smzdm/sign_daily_task/main.py, node: false, timeout: 1500 }
-          - { key: dachao, name: 大潮App, entry: script/dachao/main.py, node: false, timeout: 1800 }
-          - { key: workbuddy, name: WorkBuddy, entry: script/workbuddy/main.py, node: false, timeout: 900 }
-          - { key: trae, name: Trae CN, entry: script/trae/main.py, node: false, timeout: 900 }
-          - { key: agentrouter, name: Agent Router, entry: script/agentrouter/main.py, node: false, timeout: 600 }
+          - { key: kanxue, name: 看雪论坛, entry: script/kanxue/sign_in.py, timeout: 300 }
+          - { key: wps, name: WPS Office, entry: script/wps/main.py, timeout: 1500 }
+          - { key: smzdm, name: 什么值得买, entry: script/smzdm/sign_daily_task/main.py, timeout: 1500 }
+          - { key: trae, name: Trae CN, entry: script/trae/main.py, timeout: 900 }
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -122,12 +111,6 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements.txt
-
-      - name: 设置 Node.js 24
-        if: matrix.node
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
 
       - name: 安装 Python 依赖
         run: |

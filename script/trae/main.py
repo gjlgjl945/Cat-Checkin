@@ -39,6 +39,7 @@ Author: Assistant
 Date: 2026-09-07
 """
 
+import argparse
 import json
 import logging
 import os
@@ -54,14 +55,42 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api import TraeAPI, TraeWebAPI, login_refresh
-from import_accounts import (
-    get_or_create_device_id,
-    scan_client_device_pairs,
-)
 from notification import send_notification, NotificationSound
 
-# 启动随机延迟上限（秒）：在窗口内随机错开请求，避免与他人撞车；设为 0 关闭
-JITTER_MAX_SECONDS = int(os.environ.get('TRAE_JITTER_MAX', '600'))
+
+def _env_int(name: str, default: int) -> int:
+    """读取整型环境变量；非法值回落到默认值，避免 CI 上因笔误直接崩溃。"""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return default
+
+
+def _load_local_client_tools():
+    """
+    按需加载本机客户端辅助函数。
+
+    `import_accounts` 会扫描官方客户端的本地目录（APPDATA / XDG），属于本地工具；
+    CI 上没有这些目录，且不应为了导入一个模块而引入本地依赖。拿不到就返回 (None, None)，
+    由调用方降级为「无设备配对」——网页会话模式本来就不需要本机设备。
+    """
+    try:
+        from import_accounts import get_or_create_device_id, scan_client_device_pairs
+    except Exception as exc:  # 缺少依赖 / 文件被裁剪都不应阻断签到
+        logging.getLogger(__name__).warning(
+            f"本机客户端工具不可用，跳过设备配对（桌面令牌模式可能缺少 device_id）: {exc}")
+        return None, None
+    return get_or_create_device_id, scan_client_device_pairs
+
+
+# 是否运行在 CI（GitHub Actions 会注入 CI=true）
+IS_CI = bool(os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS'))
+
+# 启动随机延迟上限（秒）：本地默认 600s 用于错峰；CI 默认 0，避免空等吃掉超时预算
+JITTER_MAX_SECONDS = _env_int('TRAE_JITTER_MAX', 0 if IS_CI else 600)
 
 # 领取接口设备类错误码：9074 设备未登记/冲突；9095 设备当日已用于其它账号签到
 DEVICE_CONFLICT_CODES = {9074, 9095}
@@ -97,6 +126,9 @@ class TraeTasks:
         self.account_results: List[Dict[str, Any]] = []
         # 已处理账号的 UserID → 账号名，用于识别指向同一账号的重复配置条目
         self.seen_user_ids: Dict[str, str] = {}
+        # 设备解析结果：默认空；只有非 CI 环境才尝试扫描本机官方客户端
+        self.device_pair_map: Dict[str, str] = {}
+        self.shared_device: Optional[str] = None
 
     def _setup_logger(self) -> logging.Logger:
         logger = logging.getLogger(__name__)
@@ -425,35 +457,43 @@ class TraeTasks:
 
         return result
 
-    def run(self, dry_run: bool = False):
-        """执行所有账号的签到任务"""
+    def run(self, dry_run: bool = False) -> Dict[str, int]:
+        """执行所有账号的签到任务，返回汇总计数供调用方决定退出码"""
         self.dry_run = dry_run
 
+        self.logger.info("=" * 60)
+        self.logger.info("Trae CN 自动签到任务开始" + ("（dry-run 状态检查）" if dry_run else ""))
+        self.logger.info("=" * 60)
+
+        # 没有账号时直接返回：不扫描本机客户端、也不做启动抖动（否则本地/CI 都会白等）
+        if not self.accounts:
+            self.logger.warning("没有需要处理的账号")
+            return self._stats()
+
         # 设备解析：官方客户端 userId→设备配对表；本机主客户端设备仅在单账号或
-        # 账号显式 use_shared_device=true 时回退使用
-        self.device_pair_map = scan_client_device_pairs()
-        if self.device_pair_map:
-            self.logger.info(f"📱 官方客户端设备配对: {len(self.device_pair_map)} 个")
-        use_shared = len(self.accounts) == 1 or any(
-            a.get('use_shared_device') for a in self.accounts)
-        self.shared_device = get_or_create_device_id(self.config_path.parent) if use_shared else None
-        if self.shared_device:
-            scope = '单账号' if len(self.accounts) == 1 else '显式授权'
-            self.logger.info(f"📱 {scope}场景回退本机主客户端设备: {self.shared_device}")
+        # 账号显式 use_shared_device=true 时回退使用。
+        # CI 上没有客户端目录，扫描无意义，还会在 config/ 下创建 device_id 文件，直接跳过。
+        if IS_CI:
+            self.logger.info("检测到 CI 环境：跳过本机客户端设备扫描，启动抖动默认 0")
+        else:
+            get_or_create_device_id, scan_client_device_pairs = _load_local_client_tools()
+            if scan_client_device_pairs:
+                self.device_pair_map = scan_client_device_pairs()
+                if self.device_pair_map:
+                    self.logger.info(f"📱 官方客户端设备配对: {len(self.device_pair_map)} 个")
+            use_shared = len(self.accounts) == 1 or any(
+                a.get('use_shared_device') for a in self.accounts)
+            if use_shared and get_or_create_device_id:
+                self.shared_device = get_or_create_device_id(self.config_path.parent)
+                if self.shared_device:
+                    scope = '单账号' if len(self.accounts) == 1 else '显式授权'
+                    self.logger.info(f"📱 {scope}场景回退本机主客户端设备: {self.shared_device}")
 
         # 启动随机抖动，错开请求高峰
         if JITTER_MAX_SECONDS > 0:
             delay = random.uniform(0, JITTER_MAX_SECONDS)
             self.logger.info(f"⏱️  随机延迟 {delay:.0f} 秒后开始（可通过环境变量 TRAE_JITTER_MAX 调整）")
             time.sleep(delay)
-
-        self.logger.info("=" * 60)
-        self.logger.info("Trae CN 自动签到任务开始" + ("（dry-run 状态检查）" if dry_run else ""))
-        self.logger.info("=" * 60)
-
-        if not self.accounts:
-            self.logger.warning("没有需要处理的账号")
-            return
 
         for idx, account_info in enumerate(self.accounts):
             result = self.process_account(account_info)
@@ -468,6 +508,8 @@ class TraeTasks:
         self._print_summary()
         if not dry_run:
             self._send_notification()
+
+        return self._stats()
 
     def _stats(self) -> Dict[str, int]:
         """汇总各分类计数（重复配置条目单独统计，不计入签到成功/失败）"""
@@ -564,23 +606,40 @@ class TraeTasks:
             self.logger.warning(f"⚠️ 发送推送通知失败: {str(e)}")
 
 
-def main():
-    """主函数"""
-    dry_run = '--dry-run' in sys.argv
-    try:
-        tasks = TraeTasks()
-        tasks.run(dry_run=dry_run)
+def main() -> int:
+    """
+    主函数。
 
-    except FileNotFoundError as e:
-        print(f"❌ 错误: {e}")
+    退出码约定（便于 CI 判定）：
+      0  全部成功或今日已签
+      1  存在签到失败的账号，或配置/运行异常
+    """
+    parser = argparse.ArgumentParser(description="Trae CN 每日签到")
+    parser.add_argument("--config", default=None, help="配置文件路径，默认 config/token.json")
+    parser.add_argument("--dry-run", action="store_true", help="只查状态，不领取积分")
+    parser.add_argument("--allow-failures", action="store_true",
+                        help="存在失败账号时仍返回 0（默认返回 1，便于 CI 报红）")
+    args = parser.parse_args()
+
+    try:
+        tasks = TraeTasks(config_path=args.config)
+        stats = tasks.run(dry_run=args.dry_run)
+    except FileNotFoundError as exc:
+        print(f"❌ 错误: {exc}")
         print("请确保配置文件存在并包含 trae 账号信息")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ 发生未知错误: {e}")
+        return 1
+    except Exception as exc:
+        print(f"❌ 发生未知错误: {exc}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
+
+    failed = int(stats.get("failed", 0)) if stats else 0
+    if failed and not args.allow_failures:
+        print(f"❌ {failed} 个账号签到失败，退出码 1（可用 --allow-failures 关闭该行为）")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

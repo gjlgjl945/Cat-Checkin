@@ -43,55 +43,21 @@ TEMPLATE_PATH = REPO_ROOT / "config" / "template_token.json"
 #   path      config/token.json 中的节点路径
 #   creds     判定「该账号已填写」所需字段
 #   creds_all True 表示 creds 全部必填，False 表示任一即可
-#   node      True 表示运行该脚本需要 Node.js
 #   timeout   单平台超时（秒），用于 shell 层 timeout，避免单平台拖垮整条流水线
 #   ci        False 表示不纳入定时任务（功能不可用或需要人工交互）
 PLATFORMS: List[Dict[str, Any]] = [
-    {"key": "sf", "name": "顺丰速运", "entry": "script/sf/main.py",
-     "path": ("sf", "accounts"), "creds": ("sign",), "creds_all": True,
-     "node": True, "timeout": 900, "ci": True},
     {"key": "kanxue", "name": "看雪论坛", "entry": "script/kanxue/sign_in.py",
      "path": ("kanxue", "accounts"), "creds": ("cookie",), "creds_all": True,
-     "node": False, "timeout": 300, "ci": True},
-    {"key": "enshan", "name": "恩山论坛", "entry": "script/enshan/sign_in.py",
-     "path": ("enshan", "accounts"), "creds": ("cookies",), "creds_all": True,
-     "node": False, "timeout": 300, "ci": True},
-    {"key": "shyp", "name": "上海杨浦", "entry": "script/shyp/main.py",
-     "path": ("shyp", "accounts"), "creds": ("token",), "creds_all": True,
-     "node": False, "timeout": 1200, "ci": True},
-    {"key": "huaruntong_999", "name": "华润通-万象星", "entry": "script/huaruntong/999/main.py",
-     "path": ("huaruntong", "999", "accounts"), "creds": ("token",), "creds_all": True,
-     "node": False, "timeout": 900, "ci": True},
-    {"key": "huaruntong_wx", "name": "华润通-微信版", "entry": "script/huaruntong/huaruntong_wx/main.py",
-     "path": ("huaruntong", "huaruntong_wx", "accounts"), "creds": ("token",), "creds_all": True,
-     "node": False, "timeout": 600, "ci": True},
-    {"key": "huaruntong_wenti", "name": "华润通-文体未来荟", "entry": "script/huaruntong/wentiweilaihui/main.py",
-     "path": ("huaruntong", "wentiweilaihui", "accounts"), "creds": ("token",), "creds_all": True,
-     "node": False, "timeout": 600, "ci": True},
-    {"key": "huaruntong_ole", "name": "华润通-Ole", "entry": "script/huaruntong/ole/main.py",
-     "path": ("huaruntong", "ole", "accounts"), "creds": ("session_id",), "creds_all": True,
-     "node": False, "timeout": 300, "ci": False},
-    {"key": "erke", "name": "鸿星尔克", "entry": "script/erke/main.py",
-     "path": ("erke", "accounts"), "creds": ("openid", "unionid", "wx_openid"), "creds_all": False,
-     "node": False, "timeout": 600, "ci": True},
+     "timeout": 300, "ci": True},
     {"key": "wps", "name": "WPS Office", "entry": "script/wps/main.py",
      "path": ("wps", "accounts"), "creds": ("cookies",), "creds_all": True,
-     "node": False, "timeout": 1500, "ci": True},
+     "timeout": 1500, "ci": True},
     {"key": "smzdm", "name": "什么值得买", "entry": "script/smzdm/sign_daily_task/main.py",
      "path": ("smzdm", "accounts"), "creds": ("cookie", "setting"), "creds_all": False,
-     "node": False, "timeout": 1500, "ci": True},
-    {"key": "dachao", "name": "大潮App", "entry": "script/dachao/main.py",
-     "path": ("dachao", "accounts"), "creds": ("phone_number", "password_encrypted"), "creds_all": True,
-     "node": False, "timeout": 1800, "ci": True},
-    {"key": "workbuddy", "name": "WorkBuddy", "entry": "script/workbuddy/main.py",
-     "path": ("workbuddy", "accounts"), "creds": ("access_token", "refresh_token"), "creds_all": False,
-     "node": False, "timeout": 900, "ci": True},
+     "timeout": 1500, "ci": True},
     {"key": "trae", "name": "Trae CN", "entry": "script/trae/main.py",
      "path": ("trae", "accounts"), "creds": ("sessionid", "session", "access_token"), "creds_all": False,
-     "node": False, "timeout": 900, "ci": True},
-    {"key": "agentrouter", "name": "Agent Router", "entry": "script/agentrouter/main.py",
-     "path": ("agentrouter", "accounts"), "creds": ("github_session",), "creds_all": True,
-     "node": False, "timeout": 600, "ci": True},
+     "timeout": 900, "ci": True},
 ]
 
 PLATFORM_BY_KEY = {p["key"]: p for p in PLATFORMS}
@@ -256,7 +222,6 @@ def cmd_matrix(config_path: Path, select: str) -> int:
             "key": row["key"],
             "name": row["name"],
             "entry": row["entry"],
-            "node": row["node"],
             "timeout": row["timeout"],
         })
 
