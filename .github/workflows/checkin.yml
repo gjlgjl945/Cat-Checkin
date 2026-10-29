@@ -48,15 +48,16 @@ env:
   WORKBUDDY_JITTER_MAX: "0"
 
 jobs:
-  # 先做一次集中校验，并产出「本次要跑哪些平台」的矩阵。
-  # 未配置账号的平台不会进入矩阵，因此不会把工作流染红。
+  # 先做一次集中校验：配置有问题时快速失败，避免十多个平台 job 一起报错。
+  #
+  # 注意：本作业刻意不产出任何 job 输出（outputs）。GitHub 在作业结束时会把
+  # 「疑似包含 Secret」的输出整条丢弃（日志里表现为 Skip output 'x' since it may
+  # contain secret），而本作业加载了 TOKEN_JSON，由其派生的动态矩阵随时可能被误伤，
+  # 一旦被丢弃，下游 fromJSON 只能拿到空串。改用静态矩阵后不再有这个耦合。
   prepare:
     name: 校验配置
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      count: ${{ steps.matrix.outputs.count }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -75,8 +76,7 @@ jobs:
       - name: 校验配置结构
         run: python ci/platform_guard.py --validate
 
-      - name: 生成平台矩阵
-        id: matrix
+      - name: 列出本次要运行的平台
         env:
           # 定时触发时没有 inputs 上下文，用 event_name 显式兜底，避免依赖隐式空值行为
           SELECT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || '' }}
@@ -87,14 +87,31 @@ jobs:
     name: ${{ matrix.name }}
     needs: prepare
     # 定时触发没有 inputs 上下文；条件写成「非 dispatch 或非 dry_run」两种情形都安全
-    if: needs.prepare.outputs.count != '0' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
+    if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
       max-parallel: 4
+      # 静态矩阵：平台清单是代码常量，不依赖任何 job 输出。
+      # 未配置账号、或被 dispatch 的 platforms 过滤掉的平台，由 ci/platform_guard.py
+      # 在 job 内判定后跳过——位置放在装依赖之前，跳过的 job 只花十几秒。
       matrix:
-        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+        include:
+          - { key: sf, name: 顺丰速运, entry: script/sf/main.py, node: true, timeout: 900 }
+          - { key: kanxue, name: 看雪论坛, entry: script/kanxue/sign_in.py, node: false, timeout: 300 }
+          - { key: enshan, name: 恩山论坛, entry: script/enshan/sign_in.py, node: false, timeout: 300 }
+          - { key: shyp, name: 上海杨浦, entry: script/shyp/main.py, node: false, timeout: 1200 }
+          - { key: huaruntong_999, name: 华润通-万象星, entry: script/huaruntong/999/main.py, node: false, timeout: 900 }
+          - { key: huaruntong_wx, name: 华润通-微信版, entry: script/huaruntong/huaruntong_wx/main.py, node: false, timeout: 600 }
+          - { key: huaruntong_wenti, name: 华润通-文体未来荟, entry: script/huaruntong/wentiweilaihui/main.py, node: false, timeout: 600 }
+          - { key: erke, name: 鸿星尔克, entry: script/erke/main.py, node: false, timeout: 600 }
+          - { key: wps, name: WPS Office, entry: script/wps/main.py, node: false, timeout: 1500 }
+          - { key: smzdm, name: 什么值得买, entry: script/smzdm/sign_daily_task/main.py, node: false, timeout: 1500 }
+          - { key: dachao, name: 大潮App, entry: script/dachao/main.py, node: false, timeout: 1800 }
+          - { key: workbuddy, name: WorkBuddy, entry: script/workbuddy/main.py, node: false, timeout: 900 }
+          - { key: trae, name: Trae CN, entry: script/trae/main.py, node: false, timeout: 900 }
+          - { key: agentrouter, name: Agent Router, entry: script/agentrouter/main.py, node: false, timeout: 600 }
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -125,7 +142,10 @@ jobs:
 
       - name: 判断该平台是否已配置
         id: guard
-        run: python ci/platform_guard.py --platform "${{ matrix.key }}"
+        env:
+          # 手动触发时可用 platforms 输入只跑指定平台；留空表示全部
+          SELECT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || '' }}
+        run: python ci/platform_guard.py --platform "${{ matrix.key }}" --select "$SELECT"
 
       - name: 执行签到
         if: steps.guard.outputs.configured == 'true'
