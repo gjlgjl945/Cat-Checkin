@@ -88,7 +88,9 @@ python ci/platform_guard.py --config config/token.json --validate
 
 ### 5. 执行模型与可调参数
 
-- `prepare` 任务先校验 `config/token.json`，并只把「已配置账号」的平台放进矩阵；未配置的平台直接跳过，不会让工作流变红
+- `prepare` 任务先校验 `config/token.json`，配置不合法立即失败，避免十几个平台 job 一起报错
+- `checkin` 使用**静态矩阵**（平台清单写在 workflow 里）。每个 job 在装依赖之前先跑 `ci/platform_guard.py` 自查：账号数为 0、或不在 `platforms` 输入范围内的平台直接跳过，不会让工作流变红
+- 之所以不用动态矩阵：`prepare` 加载了 `TOKEN_JSON`，GitHub 会在作业结束时丢弃「疑似包含 Secret」的作业输出，下游 `fromJSON` 只能拿到空串并报 `empty input`；静态矩阵彻底绕开这个耦合
 - `checkin` 任务按平台拆成独立 job（`max-parallel: 4`，`fail-fast: false`），单平台失败不影响其他平台，红色只代表该平台本身失败
 - 单平台超时由矩阵控制（`script/*` 对应的 `timeout` 字段，300–1800 秒），外层 job 上限 40 分钟
 - 重试默认关闭（签到/答题接口普遍非幂等，盲目重试会造成重复提交）。需要时在
@@ -482,7 +484,7 @@ Cat-Checkin/
 │   ├── workflows/checkin.yml        # 定时 + 手动触发，按平台矩阵执行
 │   └── actions/prepare-config/      # 复用动作：从 Secrets 还原并校验配置
 ├── ci/
-│   ├── platform_guard.py            # 平台守卫：配置校验 / 矩阵生成 / 是否已配置
+│   ├── platform_guard.py            # 平台守卫：配置校验 / 平台筛选 / 是否已配置
 │   └── run_entry.sh                 # 统一入口包装：超时、重试、退出码
 ├── config/
 │   ├── template_notification.json   # 推送配置模板（含全部字段说明）
@@ -516,7 +518,7 @@ A：编辑 `.github/workflows/checkin.yml` 中的 `cron` 表达式。GitHub Acti
 A：会把包含 Cookie / 账号敏感信息的文件提交到公开仓库，会有泄露风险。工作流在执行时通过 Secret 解码生成该文件，运行结束后随 Runner 一起销毁。
 
 **Q：我只配置了 3 个平台，其余平台的 job 会报错吗？**
-A：不会。`prepare` 任务只把「账号数 > 0」的平台放进矩阵，未配置的平台根本不会创建 job；
+A：不会。矩阵是固定清单，但每个 job 先跑 `ci/platform_guard.py` 自查，账号数为 0 就跳过（跳过的 job 只花十几秒，不装依赖）；
 判断逻辑在 `ci/platform_guard.py`，它会把仍是模板占位值的字段视为未配置。
 
 **Q：新增平台 / 上游同步后，怎么把它接进 CI？**

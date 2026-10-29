@@ -11,7 +11,7 @@ GitHub Actions 需要解决两个问题：一是「某个平台没配账号时�
 子命令
 ------
 ``--validate``          校验 config/token.json 结构，并打印各平台账号数量
-``--matrix``            输出可运行的平台矩阵（JSON），供 workflow 的 strategy 使用
+``--matrix``            列出可运行的平台（JSON），用于本地巡检与手动触发前确认
 ``--platform <key>``    判断单个平台是否已配置，供 job 内跳过未配置平台
 
 退出码
@@ -280,11 +280,24 @@ def cmd_matrix(config_path: Path, select: str) -> int:
     return 0
 
 
-def cmd_platform(config_path: Path, key: str) -> int:
+def cmd_platform(config_path: Path, key: str, select: str = "") -> int:
     spec = PLATFORM_BY_KEY.get(key)
     if spec is None:
         gh_announce("error", f"未知平台 key: {key}")
         return 2
+
+    # 手动触发时允许用 platforms 输入收窄范围：未选中的平台直接判为「本次不跑」，
+    # 由 job 内的 if 跳过，不再需要把矩阵从上游 job 传下来。
+    selected: Optional[set] = None
+    if select.strip():
+        selected = {item.strip() for item in select.split(",") if item.strip()}
+    if selected is not None and key not in selected:
+        gh_output({"configured": "false", "account_count": "0"})
+        print(json.dumps({"key": key, "name": spec["name"], "configured": False,
+                          "accounts": 0, "selected": False}, ensure_ascii=False))
+        gh_announce("notice", f"{spec['name']} 不在本次 platforms 选择中，跳过")
+        return 0
+
     try:
         config = load_json(config_path)
     except Exception as exc:
@@ -296,8 +309,8 @@ def cmd_platform(config_path: Path, key: str) -> int:
     configured = count > 0
 
     gh_output({"configured": "true" if configured else "false", "account_count": str(count)})
-    print(json.dumps({"key": key, "name": spec["name"], "configured": configured, "accounts": count},
-                     ensure_ascii=False))
+    print(json.dumps({"key": key, "name": spec["name"], "configured": configured,
+                      "accounts": count, "selected": True}, ensure_ascii=False))
     if not configured:
         gh_announce("notice", f"{spec['name']} 未配置有效账号，跳过本次运行")
     if not spec["ci"]:
@@ -310,9 +323,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="配置文件路径")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate", action="store_true", help="校验配置结构")
-    mode.add_argument("--matrix", action="store_true", help="输出平台矩阵")
+    mode.add_argument("--matrix", action="store_true", help="列出可运行的平台（巡检用）")
     mode.add_argument("--platform", metavar="KEY", help="判断单个平台是否已配置")
-    parser.add_argument("--select", default="", help="仅选择指定平台（逗号分隔，配合 --matrix）")
+    parser.add_argument("--select", default="", help="仅选择指定平台（逗号分隔，配合 --matrix / --platform）")
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -320,7 +333,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_validate(config_path)
     if args.matrix:
         return cmd_matrix(config_path, args.select)
-    return cmd_platform(config_path, args.platform)
+    return cmd_platform(config_path, args.platform, args.select)
 
 
 if __name__ == "__main__":
