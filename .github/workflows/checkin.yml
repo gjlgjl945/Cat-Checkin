@@ -11,7 +11,7 @@ name: 多平台每日签到
 #   手动：Actions → 本工作流 → Run workflow，可只跑指定平台或做 dry-run
 on:
   schedule:
-    - cron: "12 0,6 * * *"
+    - cron: "27 0,5 * * *"
   workflow_dispatch:
     inputs:
       platforms:
